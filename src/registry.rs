@@ -1,62 +1,30 @@
+mod auth;
 mod www_authenticate;
 
 use std::{str, sync::Arc};
 
 use axum::{
-    async_trait,
     body::Body,
-    extract::{FromRequestParts, State},
-    http::{
-        header::{self, LOCATION},
-        request::Parts,
-        Request, Response, StatusCode,
-    },
+    extract::State,
+    http::{header::LOCATION, Request, Response, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Router,
 };
-use sec::Secret;
 
-#[derive(Debug)]
-struct ClientSuppliedCredentials {
-    username: String,
-    password: Secret<String>,
-}
-
-#[async_trait]
-impl<S> FromRequestParts<S> for ClientSuppliedCredentials {
-    type Rejection = StatusCode;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        if let Some(auth_header) = parts.headers.get(header::AUTHORIZATION) {
-            let (_unparsed, basic) = www_authenticate::basic_auth_response(auth_header.as_bytes())
-                .map_err(|_| StatusCode::BAD_REQUEST)?;
-
-            Ok(ClientSuppliedCredentials {
-                username: str::from_utf8(&basic.username)
-                    .map_err(|_| StatusCode::BAD_REQUEST)?
-                    .to_owned(),
-                password: Secret::new(
-                    str::from_utf8(&basic.password)
-                        .map_err(|_| StatusCode::BAD_REQUEST)?
-                        .to_owned(),
-                ),
-            })
-        } else {
-            Err(StatusCode::UNAUTHORIZED)
-        }
-    }
-}
+use self::auth::{AuthProvider, UnverifiedCredentials};
 
 // TODO: Auth
 pub(crate) struct DockerRegistry {
     realm: String,
+    auth_provider: Box<dyn AuthProvider>,
 }
 
 impl DockerRegistry {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(DockerRegistry {
             realm: "TODO REGISTRY".to_string(),
+            auth_provider: Box::new(()),
         })
     }
 
@@ -70,25 +38,26 @@ impl DockerRegistry {
 
 async fn index_v2(
     State(registry): State<Arc<DockerRegistry>>,
-    credentials: Option<ClientSuppliedCredentials>,
+    credentials: Option<UnverifiedCredentials>,
 ) -> Response<Body> {
     let realm = &registry.realm;
 
-    if credentials.is_none() {
-        // Return `UNAUTHORIZED`, since we want the client to supply credentials.
-        Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
-            .body(Body::empty())
-            .unwrap()
-    } else {
-        // TODO: Validate credentials.
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
-            .body(Body::empty())
-            .unwrap()
+    if let Some(creds) = credentials {
+        if registry.auth_provider.check_credentials(&creds) {
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
+                .body(Body::empty())
+                .unwrap();
+        }
     }
+
+    // Return `UNAUTHORIZED`, since we want the client to supply credentials.
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
+        .body(Body::empty())
+        .unwrap()
 }
 
 async fn upload_blob_test(request: Request<Body>) -> Response<Body> {
