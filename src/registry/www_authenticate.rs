@@ -1,6 +1,68 @@
 use std::str::Utf8Error;
 
+use nom::{
+    bytes::complete::{is_not, tag, tag_no_case, take_until1, take_while, take_while1},
+    character::is_space,
+    combinator::{map, map_res, not},
+    IResult,
+};
 use thiserror::Error;
+
+#[inline]
+fn challenge(input: &[u8]) -> IResult<&[u8], Challenge> {
+    // Skip whitespace.
+    let (input, _) = take_while(is_space)(input)?;
+
+    let (input, scheme) = scheme(input)?;
+
+    match scheme {
+        Scheme::Basic => {
+            let (input, params) = scheme_params_basic(input)?;
+            Ok((input, Challenge::Basic(params)))
+        }
+        _ => Ok((input, Challenge::Unsupported(scheme))),
+    }
+}
+
+fn quoted_string()
+
+fn realm(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    let (input, _) = tag_no_case("realm=")(input)?;
+
+    // Skip whitespace, just in case.
+    let (input, _) = take_while(is_space)(input)?;
+
+    let name = todo!();
+
+    Ok((input, name))
+}
+
+fn scheme_params_basic(input: &[u8]) -> IResult<&[u8], BasicChallenge> {
+    todo!()
+}
+
+#[inline(always)]
+fn not_whitespace(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    is_not(&b" \t\r\n"[..])(input)
+}
+
+/// Parses a scheme.
+#[inline]
+fn scheme(input: &[u8]) -> IResult<&[u8], Scheme> {
+    (map_res(not_whitespace, |bytes| Scheme::from_bytestr(bytes)))(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{scheme, Scheme};
+
+    #[test]
+    fn parses_scheme() {
+        assert_eq!(Ok((&b"  "[..], Scheme::Basic)), scheme(b"bAsIc  "));
+        assert_eq!(Ok((&b""[..], Scheme::Basic)), scheme(b"BASIC"));
+        assert!(scheme(b"invalid").is_err());
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum Challenge {
@@ -53,7 +115,7 @@ pub(crate) enum Error {
     UnsupportedScheme,
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Scheme {
     Basic,
     Bearer,
