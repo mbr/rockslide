@@ -7,9 +7,9 @@ use nom::{
 };
 
 #[derive(Debug, Eq, PartialEq)]
-struct BasicAuthResponse {
-    username: Vec<u8>,
-    password: Vec<u8>,
+pub(crate) struct BasicAuthResponse {
+    pub username: Vec<u8>,
+    pub password: Vec<u8>,
 }
 
 fn skip_whitespace(input: &[u8]) -> &[u8] {
@@ -18,7 +18,7 @@ fn skip_whitespace(input: &[u8]) -> &[u8] {
     input
 }
 
-fn basic_auth_response(input: &[u8]) -> IResult<&[u8], BasicAuthResponse> {
+pub(crate) fn basic_auth_response(input: &[u8]) -> IResult<&[u8], BasicAuthResponse> {
     // Skip leading whitespace.
     let input = skip_whitespace(input);
 
@@ -62,6 +62,18 @@ mod tests {
                     password: b"opensesame".to_vec()
                 }
             ))
-        )
+        );
+
+        let input = b"Basic c2FkZjpzZGZzZGZzZGZkc2Y=";
+        assert_eq!(
+            basic_auth_response(input),
+            Ok((
+                &b""[..],
+                BasicAuthResponse {
+                    username: b"sadf".to_vec(),
+                    password: b"sdfsdfsdfdsf".to_vec()
+                }
+            ))
+        );
     }
 }

@@ -11,16 +11,16 @@ use axum::{
         request::Parts,
         Request, Response, StatusCode,
     },
-    response::{Html, IntoResponse},
+    response::IntoResponse,
     routing::{get, post},
     Router,
 };
-use base64::engine::Engine as _;
+use sec::Secret;
 
 #[derive(Debug)]
 struct ClientSuppliedCredentials {
     username: String,
-    password: String,
+    password: Secret<String>,
 }
 
 #[async_trait]
@@ -28,29 +28,19 @@ impl<S> FromRequestParts<S> for ClientSuppliedCredentials {
     type Rejection = StatusCode;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        const BASIC_AUTH_PREFIX: &str = "basic";
-
         if let Some(auth_header) = parts.headers.get(header::AUTHORIZATION) {
-            let auth_part = str::from_utf8(auth_header.as_bytes())
-                .map_err(|_| StatusCode::BAD_REQUEST)?
-                .to_ascii_lowercase();
-
-            todo!();
-
-            let decoded =
-                String::from_utf8(
-                    dbg!(base64::engine::general_purpose::STANDARD
-                        .decode(dbg!(auth_header.as_bytes())))
-                    .map_err(|_| StatusCode::BAD_REQUEST)?,
-                )
+            let (_unparsed, basic) = www_authenticate::basic_auth_response(auth_header.as_bytes())
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
-            dbg!(&decoded);
-
-            let (username, password) = decoded.split_once(':').ok_or(StatusCode::BAD_REQUEST)?;
 
             Ok(ClientSuppliedCredentials {
-                username: username.to_owned(),
-                password: password.to_owned(),
+                username: str::from_utf8(&basic.username)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?
+                    .to_owned(),
+                password: Secret::new(
+                    str::from_utf8(&basic.password)
+                        .map_err(|_| StatusCode::BAD_REQUEST)?
+                        .to_owned(),
+                ),
             })
         } else {
             Err(StatusCode::UNAUTHORIZED)
@@ -81,21 +71,24 @@ impl DockerRegistry {
 async fn index_v2(
     State(registry): State<Arc<DockerRegistry>>,
     credentials: Option<ClientSuppliedCredentials>,
-    request: Request<Body>,
 ) -> Response<Body> {
     let realm = &registry.realm;
 
-    dbg!(request);
-    dbg!(&credentials);
-    Response::builder()
-        .status(StatusCode::UNAUTHORIZED)
-        .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
-        .body(Body::empty())
-        .unwrap()
-
-    // let mut resp = StatusCode::UNAUTHORIZED;
-
-    // resp.map(|_| Default::default())
+    if credentials.is_none() {
+        // Return `UNAUTHORIZED`, since we want the client to supply credentials.
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
+            .body(Body::empty())
+            .unwrap()
+    } else {
+        // TODO: Validate credentials.
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
+            .body(Body::empty())
+            .unwrap()
+    }
 }
 
 async fn upload_blob_test(request: Request<Body>) -> Response<Body> {

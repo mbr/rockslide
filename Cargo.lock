@@ -494,6 +494,7 @@ dependencies = [
  "axum",
  "base64",
  "nom",
+ "sec",
  "thiserror",
  "tokio",
  "tower-http",
@@ -517,6 +518,12 @@ name = "ryu"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad4cc8da4ef723ed60bced201181d83791ad433213d8c24efffda1eec85d741"
+
+[[package]]
+name = "sec"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcb15f07e997a0ee2e8919e8a1956416522eaf211b5ef6664354ccf813e3ef1a"
 
 [[package]]
 name = "serde"
