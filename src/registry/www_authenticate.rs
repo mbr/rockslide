@@ -28,7 +28,7 @@ fn basic_auth_response(input: &[u8]) -> IResult<&[u8], BasicAuthResponse> {
 
     // Get base64 data and decode.
     let (input, raw_data) = map_res(take_while1(|c: u8| !c.is_ascii_whitespace()), |raw_data| {
-        base64::prelude::BASE64_STANDARD_NO_PAD.decode(raw_data)
+        base64::prelude::BASE64_STANDARD.decode(raw_data)
     })(input)?;
 
     let basic = match raw_data.iter().position(|&c| c == b':') {
