@@ -1,10 +1,6 @@
-use axum::{
-    body::Body,
-    http::{header::LOCATION, Request, Response, StatusCode},
-    response::{Html, IntoResponse},
-    routing::{get, post},
-    Router,
-};
+mod registry;
+
+use registry::DockerRegistry;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -23,29 +19,14 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    let registry = DockerRegistry::new();
+
     // build our application with a route
-    let app = Router::new()
-        .route("/v2/", get(index_v2))
-        .route("/v2/test/blobs/uploads/", post(upload_blob_test))
-        .layer(TraceLayer::new_for_http());
+    let app = registry.make_router().layer(TraceLayer::new_for_http());
 
     // run it with hyper on localhost:3000
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
         .serve(app.into_make_service())
         .await
         .unwrap();
-}
-
-async fn index_v2() -> Html<&'static str> {
-    // Login will just store credentials locally, not do anything with them. This is all we need.
-    Html("all systems operational")
-}
-
-async fn upload_blob_test(request: Request<Body>) -> Response<Body> {
-    let mut resp = StatusCode::ACCEPTED.into_response();
-    let location = format!("/v2/test/blobs/uploads/asdf123"); // TODO: should be uuid
-    resp.headers_mut()
-        .append(LOCATION, location.parse().unwrap());
-
-    resp.map(|_| Default::default())
 }
