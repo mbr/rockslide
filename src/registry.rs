@@ -12,7 +12,7 @@ use axum::{
     Router,
 };
 
-use self::auth::{AuthProvider, UnverifiedCredentials};
+use self::auth::{AuthProvider, UnverifiedCredentials, ValidUser};
 
 // TODO: Auth
 pub(crate) struct DockerRegistry {
@@ -60,7 +60,7 @@ async fn index_v2(
         .unwrap()
 }
 
-async fn upload_blob_test(request: Request<Body>) -> Response<Body> {
+async fn upload_blob_test(user: ValidUser) -> Response<Body> {
     let mut resp = StatusCode::ACCEPTED.into_response();
     let location = format!("/v2/test/blobs/uploads/asdf123"); // TODO: should be uuid
     resp.headers_mut()

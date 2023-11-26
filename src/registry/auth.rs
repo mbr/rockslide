@@ -48,7 +48,7 @@ impl<S> FromRequestParts<S> for UnverifiedCredentials {
 }
 
 #[derive(Debug)]
-struct ValidUser(UnverifiedCredentials);
+pub(crate) struct ValidUser(UnverifiedCredentials);
 
 impl ValidUser {
     pub(crate) fn username(&self) -> &str {
