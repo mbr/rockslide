@@ -12,17 +12,20 @@ use self::{
     storage::{FilesystemStorage, RegistryStorage},
 };
 use axum::{
+    async_trait,
     body::Body,
-    extract::{Path, State},
+    extract::{FromRequestParts, Path, State},
     http::{
         header::{CONTENT_LENGTH, LOCATION, RANGE},
+        request::Parts,
         StatusCode,
     },
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
     Router,
 };
 use futures::stream::StreamExt;
+use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
@@ -74,10 +77,14 @@ impl DockerRegistry {
         Router::new()
             .route("/v2/", get(index_v2))
             // TODO: HEAD to look for blobs
-            .route("/v2/:namespace/:image/blobs/uploads/", post(upload_new))
+            .route("/v2/:repository/:image/blobs/uploads/", post(upload_new))
             .route(
-                "/v2/:namespace/:image/uploads/:upload_uuid",
+                "/v2/:repository/:image/uploads/:upload",
                 patch(upload_add_chunk),
+            )
+            .route(
+                "/v2/:repository/:image/uploads/:upload",
+                put(upload_finalize),
             )
             .with_state(self)
     }
@@ -109,28 +116,28 @@ async fn index_v2(
 
 async fn upload_new(
     State(registry): State<Arc<DockerRegistry>>,
-    Path((namespace, image)): Path<(String, String)>,
+    Path(location): Path<ImageLocation>,
     _auth: ValidUser,
 ) -> Result<UploadState, AppError> {
     // Initiate a new upload
     let upload = registry.storage.begin_new_upload().await?;
 
     Ok(UploadState {
-        namespace,
-        image,
+        location,
         completed: None,
         upload,
     })
 }
 
-fn mk_upload_location(namespace: &str, image: &str, uuid: Uuid) -> String {
-    format!("/v2/{namespace}/{image}/uploads/{uuid}")
+fn mk_upload_location(location: &ImageLocation, uuid: Uuid) -> String {
+    let repository = &location.repository;
+    let image = &location.image;
+    format!("/v2/{repository}/{image}/uploads/{uuid}")
 }
 
 #[derive(Debug)]
 struct UploadState {
-    namespace: String,
-    image: String,
+    location: ImageLocation,
     completed: Option<u64>,
     upload: Uuid,
 }
@@ -138,10 +145,7 @@ struct UploadState {
 impl IntoResponse for UploadState {
     fn into_response(self) -> Response {
         let mut builder = Response::builder()
-            .header(
-                LOCATION,
-                mk_upload_location(&self.namespace, &self.image, self.upload),
-            )
+            .header(LOCATION, mk_upload_location(&self.location, self.upload))
             .header(CONTENT_LENGTH, 0)
             .header("Docker-Upload-UUID", self.upload.to_string());
 
@@ -160,10 +164,21 @@ impl IntoResponse for UploadState {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct ImageLocation {
+    repository: String,
+    image: String,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize)]
+struct UploadId {
+    upload: Uuid,
+}
+
 async fn upload_add_chunk(
     State(registry): State<Arc<DockerRegistry>>,
-    // TODO: Extract UUID with correct type
-    Path((namespace, image, upload)): Path<(String, String, Uuid)>,
+    Path(location): Path<ImageLocation>,
+    Path(UploadId { upload }): Path<UploadId>,
     _auth: ValidUser,
     request: axum::extract::Request,
 ) -> Result<UploadState, AppError> {
@@ -187,9 +202,20 @@ async fn upload_add_chunk(
     writer.flush().await?;
 
     Ok(UploadState {
-        namespace,
-        image,
+        location,
         completed: Some(completed),
         upload,
     })
+}
+
+async fn upload_finalize(
+    State(registry): State<Arc<DockerRegistry>>,
+    Path(location): Path<ImageLocation>,
+    Path(UploadId { upload }): Path<UploadId>,
+    _auth: ValidUser,
+    request: axum::extract::Request,
+) -> Result<UploadState, AppError> {
+    dbg!(request);
+
+    todo!()
 }

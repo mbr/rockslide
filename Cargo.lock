@@ -643,6 +643,7 @@ dependencies = [
  "futures",
  "nom",
  "sec",
+ "serde",
  "thiserror",
  "tokio",
  "tower-http",

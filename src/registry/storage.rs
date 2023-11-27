@@ -36,7 +36,7 @@ struct Digest;
 
 struct Reference;
 
-struct Namespace;
+struct Repository;
 
 #[async_trait]
 pub(crate) trait RegistryStorage: Send + Sync {
@@ -60,7 +60,7 @@ pub(crate) trait RegistryStorage: Send + Sync {
 
     async fn get_manifest(
         &self,
-        namespace: &Namespace,
+        repository: &Repository,
         reference: &Reference,
     ) -> Result<Option<Vec<u8>>, Error>;
 }
@@ -146,7 +146,7 @@ impl RegistryStorage for FilesystemStorage {
 
     async fn get_manifest(
         &self,
-        namespace: &Namespace,
+        namespace: &Repository,
         reference: &Reference,
     ) -> Result<Option<Vec<u8>>, Error> {
         todo!()
