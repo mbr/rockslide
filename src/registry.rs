@@ -147,7 +147,7 @@ impl IntoResponse for UploadState {
 
         if let Some(completed) = self.completed {
             builder = builder
-                .header(RANGE, format!("bytes=0-{}", completed))
+                .header(RANGE, format!("0-{}", completed))
                 .status(StatusCode::NO_CONTENT)
         } else {
             builder = builder
