@@ -12,12 +12,10 @@ use self::{
     storage::{FilesystemStorage, RegistryStorage},
 };
 use axum::{
-    async_trait,
     body::Body,
-    extract::{FromRequestParts, Path, State},
+    extract::{Path, Query, State},
     http::{
         header::{CONTENT_LENGTH, LOCATION, RANGE},
-        request::Parts,
         StatusCode,
     },
     response::{IntoResponse, Response},
@@ -25,7 +23,8 @@ use axum::{
     Router,
 };
 use futures::stream::StreamExt;
-use serde::Deserialize;
+use hex::FromHex;
+use serde::{Deserialize, Deserializer};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
@@ -175,6 +174,45 @@ struct UploadId {
     upload: Uuid,
 }
 
+#[derive(Debug, Deserialize)]
+struct ImageDigest {
+    #[serde(deserialize_with = "deserialize_sha256_hexdigest")]
+    digest: storage::Digest,
+}
+
+impl Display for ImageDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "sha256:{}", self.digest)
+    }
+}
+
+const SHA256_LEN: usize = 32;
+
+fn deserialize_sha256_hexdigest<'de, D>(deserializer: D) -> Result<storage::Digest, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    const PREFIX_LEN: usize = 7;
+    const DIGEST_HEX_LEN: usize = SHA256_LEN * 2;
+
+    let raw = String::deserialize(deserializer)?;
+
+    if raw.len() != PREFIX_LEN + DIGEST_HEX_LEN {
+        return Err(serde::de::Error::custom("wrong length"));
+    }
+
+    if !raw.starts_with("sha256:") {
+        return Err(serde::de::Error::custom("wrong prefix"));
+    }
+
+    let hex_encoded = &raw[PREFIX_LEN..];
+    debug_assert_eq!(hex_encoded.len(), DIGEST_HEX_LEN);
+
+    let digest = <[u8; SHA256_LEN]>::from_hex(hex_encoded).map_err(serde::de::Error::custom)?;
+
+    Ok(storage::Digest::new(digest))
+}
+
 async fn upload_add_chunk(
     State(registry): State<Arc<DockerRegistry>>,
     Path(location): Path<ImageLocation>,
@@ -210,12 +248,32 @@ async fn upload_add_chunk(
 
 async fn upload_finalize(
     State(registry): State<Arc<DockerRegistry>>,
-    Path(location): Path<ImageLocation>,
+    //Path(location): Path<ImageLocation>,
     Path(UploadId { upload }): Path<UploadId>,
+    Query(image_digest): Query<ImageDigest>,
     _auth: ValidUser,
     request: axum::extract::Request,
-) -> Result<UploadState, AppError> {
-    dbg!(request);
+) -> Result<Response<Body>, AppError> {
+    // We do not support the final chunk in the `PUT` call, so ensure that's not the case.
+    match request.headers().get(CONTENT_LENGTH) {
+        Some(value) => {
+            let num_bytes: u64 = value.to_str()?.parse()?;
+            if num_bytes != 0 {
+                return Err(anyhow::anyhow!("missing content length not implemented").into());
+            }
 
-    todo!()
+            // 0 is the only acceptable value here.
+        }
+        None => return Err(anyhow::anyhow!("missing content length not implemented").into()),
+    }
+
+    registry
+        .storage
+        .finalize_upload(upload, image_digest.digest)
+        .await?;
+
+    Ok(Response::builder()
+        .status(StatusCode::CREATED)
+        .header("Docker-Content-Digest", image_digest.to_string())
+        .body(Body::empty())?)
 }
