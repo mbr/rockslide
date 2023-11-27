@@ -2,7 +2,7 @@ use base64::Engine;
 use nom::{
     bytes::complete::{tag_no_case, take_while, take_while1},
     character::is_space,
-    combinator::{map_res, not},
+    combinator::map_res,
     IResult,
 };
 
