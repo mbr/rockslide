@@ -5,7 +5,7 @@ use std::{
 
 use axum::{async_trait, http::StatusCode, response::IntoResponse};
 use thiserror::Error;
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncSeekExt, AsyncWrite};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -50,9 +50,9 @@ pub(crate) trait RegistryStorage: Send + Sync {
 
     async fn get_writer(
         &self,
-        start_at: usize,
+        start_at: u64,
         upload: Uuid,
-    ) -> Result<Box<dyn AsyncWrite + Send>, Error>;
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>, Error>;
 
     async fn finalize_upload(&self, upload: Uuid, hash: ()) -> Result<Digest, Error>;
 
@@ -67,7 +67,7 @@ pub(crate) trait RegistryStorage: Send + Sync {
 
 #[derive(Debug)]
 pub(crate) struct FilesystemStorage {
-    root: PathBuf,
+    // root: PathBuf,
     uploads: PathBuf,
 }
 
@@ -82,7 +82,10 @@ impl FilesystemStorage {
             fs::create_dir(&uploads)?;
         }
 
-        Ok(FilesystemStorage { root, uploads })
+        Ok(FilesystemStorage {
+            //root,
+            uploads,
+        })
     }
 
     fn upload_path(&self, upload: Uuid) -> PathBuf {
@@ -115,10 +118,22 @@ impl RegistryStorage for FilesystemStorage {
 
     async fn get_writer(
         &self,
-        start_at: usize,
+        start_at: u64,
         upload: Uuid,
-    ) -> Result<Box<dyn AsyncWrite + Send>, Error> {
-        todo!()
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>, Error> {
+        let location = self.upload_path(upload);
+        let mut file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .truncate(false)
+            .open(location)
+            .await
+            .map_err(Error::Io)?;
+
+        file.seek(io::SeekFrom::Start(start_at))
+            .await
+            .map_err(Error::Io)?;
+
+        Ok(Box::new(file))
     }
 
     async fn finalize_upload(&self, upload: Uuid, hash: ()) -> Result<Digest, Error> {
