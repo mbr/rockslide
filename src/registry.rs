@@ -9,7 +9,7 @@ use std::{
 
 use self::{
     auth::{AuthProvider, UnverifiedCredentials, ValidUser},
-    storage::{FilesystemStorage, RegistryStorage},
+    storage::{FilesystemStorage, ImageLocation, RegistryStorage},
 };
 use axum::{
     body::Body,
@@ -129,8 +129,8 @@ async fn upload_new(
 }
 
 fn mk_upload_location(location: &ImageLocation, uuid: Uuid) -> String {
-    let repository = &location.repository;
-    let image = &location.image;
+    let repository = &location.repository();
+    let image = &location.image();
     format!("/v2/{repository}/{image}/uploads/{uuid}")
 }
 
@@ -161,12 +161,6 @@ impl IntoResponse for UploadState {
 
         builder.body(Body::empty()).unwrap()
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct ImageLocation {
-    repository: String,
-    image: String,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]

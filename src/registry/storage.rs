@@ -6,6 +6,7 @@ use std::{
 };
 
 use axum::{async_trait, http::StatusCode, response::IntoResponse};
+use serde::Deserialize;
 use sha2::Digest as Sha2Digest;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite};
@@ -30,12 +31,28 @@ impl Display for Digest {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImageLocation {
+    repository: String,
+    image: String,
+}
+
+impl ImageLocation {
+    #[inline(always)]
+    pub(crate) fn repository(&self) -> &str {
+        self.repository.as_ref()
+    }
+
+    #[inline(always)]
+    pub(crate) fn image(&self) -> &str {
+        self.image.as_ref()
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("given upload does not exist")]
     UploadDoesNotExit,
-    #[error("can not upload any more, out of space")]
-    OutOfSpace,
     #[error("digest did not match")]
     DigestMismatch,
 
@@ -51,17 +68,12 @@ impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         match self {
             Error::UploadDoesNotExit => StatusCode::NOT_FOUND.into_response(),
-            Error::OutOfSpace
-            | Error::DigestMismatch
-            | Error::Io(_)
-            | Error::BackgroundTaskPanicked(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Error::DigestMismatch | Error::Io(_) | Error::BackgroundTaskPanicked(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
         }
     }
 }
-
-pub(crate) struct Reference;
-
-pub(crate) struct Repository;
 
 #[async_trait]
 pub(crate) trait RegistryStorage: Send + Sync {
@@ -83,11 +95,7 @@ pub(crate) trait RegistryStorage: Send + Sync {
 
     async fn cancel_upload(&self, upload: Uuid) -> Result<(), Error>;
 
-    async fn get_manifest(
-        &self,
-        repository: &Repository,
-        reference: &Reference,
-    ) -> Result<Option<Vec<u8>>, Error>;
+    async fn get_manifest(&self, location: &ImageLocation) -> Result<Option<Vec<u8>>, Error>;
 }
 
 #[derive(Debug)]
@@ -127,21 +135,22 @@ impl RegistryStorage for FilesystemStorage {
     async fn begin_new_upload(&self) -> Result<Uuid, Error> {
         let upload = Uuid::new_v4();
         let out_path = self.upload_path(upload);
+
         // Write zero-sized file.
         let _file = tokio::fs::File::create(out_path).await.map_err(Error::Io)?;
 
         Ok(upload)
     }
 
-    async fn get_upload_progress(&self, upload: Uuid) -> Result<usize, Error> {
+    async fn get_upload_progress(&self, _upload: Uuid) -> Result<usize, Error> {
         todo!()
     }
 
-    async fn get_allocated_size(&self, upload: Uuid) -> Result<usize, Error> {
+    async fn get_allocated_size(&self, _upload: Uuid) -> Result<usize, Error> {
         todo!()
     }
 
-    async fn allocate_upload(&self, upload: Uuid) -> Result<usize, Error> {
+    async fn allocate_upload(&self, _upload: Uuid) -> Result<usize, Error> {
         todo!()
     }
 
@@ -151,6 +160,11 @@ impl RegistryStorage for FilesystemStorage {
         upload: Uuid,
     ) -> Result<Box<dyn AsyncWrite + Send + Unpin>, Error> {
         let location = self.upload_path(upload);
+
+        if !location.exists() {
+            return Err(Error::UploadDoesNotExit);
+        }
+
         let mut file = tokio::fs::OpenOptions::new()
             .append(true)
             .truncate(false)
@@ -170,6 +184,10 @@ impl RegistryStorage for FilesystemStorage {
         // TODO: Lock in place so that the hash cannot be corrupted/attacked.
 
         let upload_path = self.upload_path(upload);
+
+        if !upload_path.exists() {
+            return Err(Error::UploadDoesNotExit);
+        }
 
         // We offload hashing to a blocking thread.
         let actual = {
@@ -210,15 +228,11 @@ impl RegistryStorage for FilesystemStorage {
         Ok(())
     }
 
-    async fn cancel_upload(&self, upload: Uuid) -> Result<(), Error> {
+    async fn cancel_upload(&self, _upload: Uuid) -> Result<(), Error> {
         todo!()
     }
 
-    async fn get_manifest(
-        &self,
-        namespace: &Repository,
-        reference: &Reference,
-    ) -> Result<Option<Vec<u8>>, Error> {
+    async fn get_manifest(&self, _location: &ImageLocation) -> Result<Option<Vec<u8>>, Error> {
         todo!()
     }
 }
