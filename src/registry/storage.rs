@@ -9,7 +9,7 @@ use axum::{async_trait, http::StatusCode, response::IntoResponse};
 use serde::Deserialize;
 use sha2::Digest as Sha2Digest;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite};
 use uuid::Uuid;
 
 const SHA256_LEN: usize = 32;
@@ -31,6 +31,7 @@ impl Display for Digest {
     }
 }
 
+// TODO: Remove `Deserialize`, should not leak into `storage` module.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImageLocation {
     repository: String,
@@ -75,6 +76,22 @@ impl IntoResponse for Error {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct BlobMetadata {
+    digest: Digest,
+    size: u64,
+}
+
+impl BlobMetadata {
+    pub(crate) fn digest(&self) -> Digest {
+        self.digest
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+}
+
 #[async_trait]
 pub(crate) trait RegistryStorage: Send + Sync {
     async fn begin_new_upload(&self) -> Result<Uuid, Error>;
@@ -82,6 +99,8 @@ pub(crate) trait RegistryStorage: Send + Sync {
     async fn get_upload_progress(&self, upload: Uuid) -> Result<usize, Error>;
 
     async fn get_allocated_size(&self, upload: Uuid) -> Result<usize, Error>;
+
+    async fn get_blob_metadata(&self, digest: Digest) -> Result<Option<BlobMetadata>, Error>;
 
     async fn allocate_upload(&self, upload: Uuid) -> Result<usize, Error>;
 
@@ -141,13 +160,27 @@ impl RegistryStorage for FilesystemStorage {
 
         Ok(upload)
     }
-
     async fn get_upload_progress(&self, _upload: Uuid) -> Result<usize, Error> {
         todo!()
     }
 
     async fn get_allocated_size(&self, _upload: Uuid) -> Result<usize, Error> {
         todo!()
+    }
+
+    async fn get_blob_metadata(&self, digest: Digest) -> Result<Option<BlobMetadata>, Error> {
+        let blob_path = self.blob_path(digest);
+
+        if !blob_path.exists() {
+            return Ok(None);
+        }
+
+        let metadata = tokio::fs::metadata(blob_path).await.map_err(Error::Io)?;
+
+        Ok(Some(BlobMetadata {
+            digest,
+            size: metadata.len(),
+        }))
     }
 
     async fn allocate_upload(&self, _upload: Uuid) -> Result<usize, Error> {

@@ -15,11 +15,11 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{
-        header::{CONTENT_LENGTH, LOCATION, RANGE},
+        header::{CONTENT_LENGTH, CONTENT_TYPE, LOCATION, RANGE},
         StatusCode,
     },
     response::{IntoResponse, Response},
-    routing::{get, patch, post, put},
+    routing::{get, head, patch, post, put},
     Router,
 };
 use futures::stream::StreamExt;
@@ -75,7 +75,7 @@ impl DockerRegistry {
     pub(crate) fn make_router(self: Arc<DockerRegistry>) -> Router {
         Router::new()
             .route("/v2/", get(index_v2))
-            // TODO: HEAD to look for blobs
+            .route("/v2/:repository/:image/blobs/:digest", head(blob_check))
             .route("/v2/:repository/:image/blobs/uploads/", post(upload_new))
             .route(
                 "/v2/:repository/:image/uploads/:upload",
@@ -111,6 +111,27 @@ async fn index_v2(
         .header("WWW-Authenticate", format!("Basic realm=\"{realm}\""))
         .body(Body::empty())
         .unwrap()
+}
+
+async fn blob_check(
+    State(registry): State<Arc<DockerRegistry>>,
+    Path(image): Path<ImageDigest>,
+    _auth: ValidUser,
+) -> Result<Response, AppError> {
+    if let Some(metadata) = registry.storage.get_blob_metadata(image.digest).await? {
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, metadata.size())
+            .header("Docker-Content-Digest", image.to_string())
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(Body::empty())
+            .unwrap())
+    } else {
+        Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap())
+    }
 }
 
 async fn upload_new(
