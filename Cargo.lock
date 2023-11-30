@@ -702,6 +702,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing-subscriber",
  "uuid",

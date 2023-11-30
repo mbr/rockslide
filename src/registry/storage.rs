@@ -10,6 +10,7 @@ use serde::Deserialize;
 use sha2::Digest as Sha2Digest;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite};
+use tracing_subscriber::Layer;
 use uuid::Uuid;
 
 const SHA256_LEN: usize = 32;
@@ -29,6 +30,22 @@ impl Display for Digest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&hex::encode(&self.0[..]))
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    name: String,
+    tag: String,
+    #[serde(rename = "camelCase")]
+    fs_layers: Vec<LayerManifest>,
+    history: String,
+    signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LayerManifest {
+    #[serde(rename = "camelCase")]
+    blob_sum: String,
 }
 
 // TODO: Remove `Deserialize`, should not leak into `storage` module.
@@ -92,6 +109,8 @@ impl BlobMetadata {
     }
 }
 
+pub(crate) struct Reference {}
+
 #[async_trait]
 pub(crate) trait RegistryStorage: Send + Sync {
     async fn begin_new_upload(&self) -> Result<Uuid, Error>;
@@ -99,6 +118,11 @@ pub(crate) trait RegistryStorage: Send + Sync {
     async fn get_upload_progress(&self, upload: Uuid) -> Result<usize, Error>;
 
     async fn get_allocated_size(&self, upload: Uuid) -> Result<usize, Error>;
+
+    async fn get_blob_reader(
+        &self,
+        digest: Digest,
+    ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>, Error>;
 
     async fn get_blob_metadata(&self, digest: Digest) -> Result<Option<BlobMetadata>, Error>;
 
@@ -115,6 +139,13 @@ pub(crate) trait RegistryStorage: Send + Sync {
     async fn cancel_upload(&self, upload: Uuid) -> Result<(), Error>;
 
     async fn get_manifest(&self, location: &ImageLocation) -> Result<Option<Vec<u8>>, Error>;
+
+    async fn put_manifest(
+        &self,
+        location: &ImageLocation,
+        reference: &Reference,
+        manifest: &Manifest,
+    ) -> Result<Digest, Error>;
 }
 
 #[derive(Debug)]
@@ -183,6 +214,21 @@ impl RegistryStorage for FilesystemStorage {
         }))
     }
 
+    async fn get_blob_reader(
+        &self,
+        digest: Digest,
+    ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>, Error> {
+        let blob_path = self.blob_path(digest);
+
+        if !blob_path.exists() {
+            return Ok(None);
+        }
+
+        let reader = tokio::fs::File::open(blob_path).await.map_err(Error::Io)?;
+
+        Ok(Some(Box::new(reader)))
+    }
+
     async fn allocate_upload(&self, _upload: Uuid) -> Result<usize, Error> {
         todo!()
     }
@@ -226,7 +272,7 @@ impl RegistryStorage for FilesystemStorage {
         let actual = {
             let upload_path = upload_path.clone();
             tokio::task::spawn_blocking::<_, Result<Digest, Error>>(move || {
-                let mut src = dbg!(fs::File::open(upload_path).map_err(Error::Io)?);
+                let mut src = fs::File::open(upload_path).map_err(Error::Io)?;
 
                 // Uses `vec!` instead of `Box`, as initializing the latter blows the stack:
                 let mut buf = vec![0; BUFFER_SIZE];
@@ -266,6 +312,15 @@ impl RegistryStorage for FilesystemStorage {
     }
 
     async fn get_manifest(&self, _location: &ImageLocation) -> Result<Option<Vec<u8>>, Error> {
+        todo!()
+    }
+
+    async fn put_manifest(
+        &self,
+        location: &ImageLocation,
+        reference: &Reference,
+        manifest: &Manifest,
+    ) -> Result<Digest, Error> {
         todo!()
     }
 }

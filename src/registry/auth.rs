@@ -95,3 +95,14 @@ impl AuthProvider for () {
         true
     }
 }
+
+#[async_trait]
+impl AuthProvider for bool {
+    async fn check_credentials(&self, creds: &UnverifiedCredentials) -> bool {
+        *self
+    }
+
+    async fn has_access_to(&self, username: &str, namespace: &str, image: &str) -> bool {
+        *self
+    }
+}

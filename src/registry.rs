@@ -26,6 +26,7 @@ use futures::stream::StreamExt;
 use hex::FromHex;
 use serde::{Deserialize, Deserializer};
 use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 #[derive(Debug)]
