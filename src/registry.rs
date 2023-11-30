@@ -1,3 +1,10 @@
+//! Open Container / "Docker" registry
+//!
+//! ## Specs
+//!
+//! * Registry: https://github.com/opencontainers/distribution-spec/blob/v1.0.1/spec.md
+//! * Manifest: https://github.com/opencontainers/image-spec/blob/main/manifest.md
+
 mod auth;
 mod storage;
 mod www_authenticate;
