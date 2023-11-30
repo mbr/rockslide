@@ -5,6 +5,9 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // https://github.com/distribution/distribution/blob/5cb406d511b7b9163bff9b6439072e4892e5ae3b/docs/spec/api.md
+// https://distribution.github.io/distribution/spec/manifest-v2-2/
+//
+// Better: https://github.com/opencontainers/distribution-spec/blob/v1.0.1/spec.md
 
 #[tokio::main]
 async fn main() {

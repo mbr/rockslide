@@ -29,6 +29,17 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
+// TODO: Return error as:
+// {
+//     "errors:" [{
+//             "code": <error identifier>,
+//             "message": <message describing condition>,
+//             "detail": <unstructured>
+//         },
+//         ...
+//     ]
+// }
+
 #[derive(Debug)]
 struct AppError(anyhow::Error);
 
@@ -86,6 +97,7 @@ impl DockerRegistry {
                 "/v2/:repository/:image/uploads/:upload",
                 put(upload_finalize),
             )
+            .route("/v2/:repository/:image/manifests/latest", put(manifest_put))
             .with_state(self)
     }
 }
@@ -292,4 +304,17 @@ async fn upload_finalize(
         .status(StatusCode::CREATED)
         .header("Docker-Content-Digest", image_digest.to_string())
         .body(Body::empty())?)
+}
+
+async fn manifest_put(
+    State(registry): State<Arc<DockerRegistry>>,
+    //Path(location): Path<ImageLocation>,
+    // Path(UploadId { upload }): Path<UploadId>,
+    // Query(image_digest): Query<ImageDigest>,
+    _auth: ValidUser,
+    // request: axum::extract::Request,
+    body: String,
+) -> Result<Response<Body>, AppError> {
+    println!("{}", body);
+    todo!()
 }
