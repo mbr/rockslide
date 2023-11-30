@@ -7,6 +7,7 @@
 
 mod auth;
 mod storage;
+mod types;
 mod www_authenticate;
 
 use std::{
