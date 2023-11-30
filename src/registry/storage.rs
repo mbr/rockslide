@@ -60,6 +60,15 @@ impl ImageLocation {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct Reference(String);
+
+impl Reference {
+    fn name(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("given upload does not exist")]
@@ -102,8 +111,6 @@ impl BlobMetadata {
     }
 }
 
-pub(crate) struct Reference {}
-
 #[async_trait]
 pub(crate) trait RegistryStorage: Send + Sync {
     async fn begin_new_upload(&self) -> Result<Uuid, Error>;
@@ -138,13 +145,14 @@ pub(crate) trait RegistryStorage: Send + Sync {
         location: &ImageLocation,
         reference: &Reference,
         manifest: &ImageManifest,
-    ) -> Result<Digest, Error>;
+    ) -> Result<(), Error>;
 }
 
 #[derive(Debug)]
 pub(crate) struct FilesystemStorage {
     uploads: PathBuf,
     blobs: PathBuf,
+    manifests: PathBuf,
 }
 
 impl FilesystemStorage {
@@ -153,6 +161,7 @@ impl FilesystemStorage {
 
         let uploads = root.join("uploads");
         let blobs = root.join("blobs");
+        let manifests = root.join("manifests");
 
         // Create necessary subpaths.
         if !uploads.exists() {
@@ -163,13 +172,28 @@ impl FilesystemStorage {
             fs::create_dir(&blobs)?;
         }
 
-        Ok(FilesystemStorage { uploads, blobs })
+        if !manifests.exists() {
+            fs::create_dir(&manifests)?;
+        }
+
+        Ok(FilesystemStorage {
+            uploads,
+            blobs,
+            manifests,
+        })
     }
     fn blob_path(&self, digest: Digest) -> PathBuf {
         self.blobs.join(format!("{}", digest))
     }
     fn upload_path(&self, upload: Uuid) -> PathBuf {
         self.uploads.join(format!("{}.partial", upload))
+    }
+
+    fn manifest_path(&self, location: &ImageLocation, reference: &Reference) -> PathBuf {
+        self.manifests
+            .join(location.repository())
+            .join(location.image())
+            .join(reference.name())
     }
 }
 
@@ -313,7 +337,19 @@ impl RegistryStorage for FilesystemStorage {
         location: &ImageLocation,
         reference: &Reference,
         manifest: &ImageManifest,
-    ) -> Result<Digest, Error> {
-        todo!()
+    ) -> Result<(), Error> {
+        // TODO: Validate all blobs are completely uploaded.
+
+        let dest = self.manifest_path(&location, &reference);
+        let parent = dest.parent().expect("must have parent");
+
+        if !parent.exists() {
+            tokio::fs::create_dir_all(parent).await.map_err(Error::Io)?;
+        }
+
+        let contents =
+            serde_json::to_string_pretty(manifest).expect("manifest should always be serializable");
+
+        tokio::fs::write(dest, contents).await.map_err(Error::Io)
     }
 }

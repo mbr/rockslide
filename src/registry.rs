@@ -17,7 +17,8 @@ use std::{
 
 use self::{
     auth::{AuthProvider, UnverifiedCredentials, ValidUser},
-    storage::{FilesystemStorage, ImageLocation, RegistryStorage},
+    storage::{FilesystemStorage, ImageLocation, Reference, RegistryStorage},
+    types::ImageManifest,
 };
 use axum::{
     body::Body,
@@ -28,7 +29,7 @@ use axum::{
     },
     response::{IntoResponse, Response},
     routing::{get, head, patch, post, put},
-    Router,
+    Json, Router,
 };
 use futures::stream::StreamExt;
 use hex::FromHex;
@@ -105,7 +106,10 @@ impl DockerRegistry {
                 "/v2/:repository/:image/uploads/:upload",
                 put(upload_finalize),
             )
-            .route("/v2/:repository/:image/manifests/latest", put(manifest_put))
+            .route(
+                "/v2/:repository/:image/manifests/:reference",
+                put(manifest_put),
+            )
             .with_state(self)
     }
 }
@@ -314,15 +318,31 @@ async fn upload_finalize(
         .body(Body::empty())?)
 }
 
+#[derive(Debug, Deserialize)]
+struct LocationWithReference {
+    #[serde(flatten)]
+    location: ImageLocation,
+    reference: Reference,
+}
+
 async fn manifest_put(
     State(registry): State<Arc<DockerRegistry>>,
-    //Path(location): Path<ImageLocation>,
-    // Path(UploadId { upload }): Path<UploadId>,
-    // Query(image_digest): Query<ImageDigest>,
+    Path(LocationWithReference {
+        location,
+        reference,
+    }): Path<LocationWithReference>,
     _auth: ValidUser,
-    // request: axum::extract::Request,
-    body: String,
+    Json(image_manifest): Json<ImageManifest>,
 ) -> Result<Response<Body>, AppError> {
-    println!("{}", body);
-    todo!()
+    registry
+        .storage
+        .put_manifest(&location, &reference, &image_manifest)
+        .await?;
+
+    // TODO: Return manifest URL.
+    Ok(Response::builder()
+        .status(StatusCode::CREATED)
+        .header(LOCATION, "http://localhost:3000/TODO")
+        .body(Body::empty())
+        .unwrap())
 }

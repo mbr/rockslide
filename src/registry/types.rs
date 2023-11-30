@@ -1,14 +1,8 @@
 use std::collections::HashMap;
 
-use axum::{
-    async_trait,
-    extract::{rejection::StringRejection, FromRequest, Request},
-    response::{IntoResponse, Response},
-};
-use serde::Deserialize;
-use thiserror::Error;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ContentDescriptor {
     media_type: String,
@@ -20,7 +14,7 @@ pub(crate) struct ContentDescriptor {
     artifact_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ImageManifest {
     schema_version: u32,
@@ -32,35 +26,6 @@ pub(crate) struct ImageManifest {
     config: ContentDescriptor,
     layers: Vec<ContentDescriptor>,
     subject: Option<ContentDescriptor>,
-}
-
-#[async_trait]
-impl<S> FromRequest<S> for ImageManifest
-where
-    S: Send + Sync,
-{
-    /// If the extractor fails it'll use this "rejection" type. A rejection is
-    /// a kind of error that can be converted into a response.
-    type Rejection = JsonContentRejection;
-
-    /// Perform the extraction.
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let body = String::from_request(req, state)
-            .await
-            .map_err(IntoResponse::into_response)?;
-    }
-}
-
-#[derive(Debug, Error)]
-pub(crate) enum JsonContentRejection {
-    #[error("could retrieve body")]
-    BodyFailure(StringRejection),
-}
-
-impl IntoResponse for JsonContentRejection {
-    fn into_response(self) -> Response {
-        todo!()
-    }
 }
 
 #[cfg(test)]
