@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fmt::Display,
     fs,
     io::{self, Read},
@@ -11,7 +10,6 @@ use serde::Deserialize;
 use sha2::Digest as Sha2Digest;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite};
-use tracing_subscriber::Layer;
 use uuid::Uuid;
 
 use super::types::ImageManifest;
@@ -20,12 +18,20 @@ const SHA256_LEN: usize = 32;
 
 const BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1 MiB
 
+// TODO: Maybe use `ImageDigest` directly?
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub(crate) struct Digest([u8; SHA256_LEN]);
 
 impl Digest {
     pub(crate) fn new(bytes: [u8; SHA256_LEN]) -> Self {
         Self(bytes)
+    }
+
+    pub(crate) fn from_contents(contents: &[u8]) -> Self {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(contents);
+
+        Self::new(hasher.finalize().into())
     }
 }
 
@@ -145,7 +151,7 @@ pub(crate) trait RegistryStorage: Send + Sync {
         location: &ImageLocation,
         reference: &Reference,
         manifest: &ImageManifest,
-    ) -> Result<(), Error>;
+    ) -> Result<Digest, Error>;
 }
 
 #[derive(Debug)]
@@ -337,7 +343,7 @@ impl RegistryStorage for FilesystemStorage {
         location: &ImageLocation,
         reference: &Reference,
         manifest: &ImageManifest,
-    ) -> Result<(), Error> {
+    ) -> Result<Digest, Error> {
         // TODO: Validate all blobs are completely uploaded.
 
         let dest = self.manifest_path(&location, &reference);
@@ -350,6 +356,9 @@ impl RegistryStorage for FilesystemStorage {
         let contents =
             serde_json::to_string_pretty(manifest).expect("manifest should always be serializable");
 
-        tokio::fs::write(dest, contents).await.map_err(Error::Io)
+        // TODO: Symlink and instead store manifest as content addressed?
+        tokio::fs::write(dest, &contents).await.map_err(Error::Io)?;
+
+        Ok(Digest::from_contents(contents.as_ref()))
     }
 }

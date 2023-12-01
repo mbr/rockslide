@@ -220,6 +220,12 @@ struct ImageDigest {
     digest: storage::Digest,
 }
 
+impl ImageDigest {
+    fn new(digest: storage::Digest) -> Self {
+        Self { digest }
+    }
+}
+
 impl Display for ImageDigest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sha256:{}", self.digest)
@@ -334,7 +340,10 @@ async fn manifest_put(
     _auth: ValidUser,
     Json(image_manifest): Json<ImageManifest>,
 ) -> Result<Response<Body>, AppError> {
-    registry
+    // TODO: This alters the image, since it is reformatted through reserialization when passed to
+    //       storage. We may need to keep the hash of the manifest and not round-trip it instead.
+
+    let digest = registry
         .storage
         .put_manifest(&location, &reference, &image_manifest)
         .await?;
@@ -343,6 +352,11 @@ async fn manifest_put(
     Ok(Response::builder()
         .status(StatusCode::CREATED)
         .header(LOCATION, "http://localhost:3000/TODO")
+        .header(CONTENT_LENGTH, 0)
+        .header(
+            "Docker-Content-Digest",
+            ImageDigest::new(digest).to_string(),
+        )
         .body(Body::empty())
         .unwrap())
 }
