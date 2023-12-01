@@ -226,6 +226,10 @@ impl FilesystemStorage {
             .join(manifest_reference.location().image())
             .join(manifest_reference.reference().name())
     }
+
+    fn temp_tag_path(&self) -> PathBuf {
+        self.tags.join(Uuid::new_v4().to_string())
+    }
 }
 
 #[async_trait]
@@ -385,9 +389,12 @@ impl RegistryStorage for FilesystemStorage {
                 .map_err(Error::Io)?;
         }
 
-        tokio::fs::symlink(self.blob_rel_path(digest), tag)
+        let tmp_tag = self.temp_tag_path();
+
+        tokio::fs::symlink(self.blob_rel_path(digest), &tmp_tag)
             .await
             .map_err(Error::Io)?;
+        tokio::fs::rename(tmp_tag, tag).await.map_err(Error::Io)?;
 
         Ok(digest)
     }
