@@ -17,7 +17,7 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let registry = DockerRegistry::new();
+    let registry = DockerRegistry::new("./rockslide-storage");
 
     let app = registry.make_router().layer(TraceLayer::new_for_http());
 

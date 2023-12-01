@@ -98,13 +98,11 @@ pub(crate) struct DockerRegistry {
 }
 
 impl DockerRegistry {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new<P: AsRef<std::path::Path>>(storage_path: P) -> Arc<Self> {
         Arc::new(DockerRegistry {
             realm: "TODO REGISTRY".to_string(),
             auth_provider: Box::new(()),
-            storage: Box::new(
-                FilesystemStorage::new("./rockslide-storage").expect("inaccessible storage"),
-            ),
+            storage: Box::new(FilesystemStorage::new(storage_path).expect("inaccessible storage")),
         })
     }
 
@@ -444,4 +442,75 @@ async fn manifest_get(
         .header(CONTENT_TYPE, manifest.media_type())
         .body(manifest_json.into())
         .unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{header::AUTHORIZATION, Request, StatusCode},
+        routing::RouterIntoService,
+        Router,
+    };
+    use tempdir::TempDir;
+    use tower::{util::ServiceExt, Service};
+    use tower_http::trace::TraceLayer;
+
+    use super::DockerRegistry;
+
+    struct Context {
+        tmp: TempDir,
+        password: String,
+    }
+
+    impl Context {
+        fn basic_auth(&self) -> &str {
+            "Basic Zml4bWU="
+        }
+    }
+
+    fn mk_test_app() -> (Context, RouterIntoService<Body>) {
+        let tmp = TempDir::new("rockslide-test").expect("could not create temporary directory");
+
+        let registry = DockerRegistry::new(tmp.as_ref());
+        let router = registry.make_router().layer(TraceLayer::new_for_http());
+        let password = "asdf - FIXME, implement actual auth".to_owned();
+
+        let service = router.into_service::<Body>();
+
+        (Context { tmp, password }, service)
+    }
+
+    // TODO: Test that checks authentication works.
+
+    #[tokio::test]
+    async fn upload_image() {
+        let (ctx, mut service) = mk_test_app();
+
+        let app = service.ready().await.expect("could not launch service");
+
+        // Step 1: Check if API is online.
+        let response = app
+            .call(Request::builder().uri("/v2/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        // Should yield an "authorization required" prompt.
+        // TODO: Move to auth checking code.
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // Step 2: Login
+        let response = app
+            .call(
+                Request::builder()
+                    .uri("/v2/")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK)
+    }
 }
