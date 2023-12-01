@@ -275,7 +275,8 @@ impl<'de> Deserialize<'de> for ImageDigest {
     where
         D: Deserializer<'de>,
     {
-        let raw = <&str>::deserialize(deserializer)?;
+        // Note: For some reason, `&str` here causes parsing inside query parameters to fail.
+        let raw = <String>::deserialize(deserializer)?;
         raw.parse().map_err(serde::de::Error::custom)
     }
 }
