@@ -12,6 +12,7 @@ mod www_authenticate;
 
 use std::{
     fmt::{self, Display},
+    str::FromStr,
     sync::Arc,
 };
 
@@ -35,7 +36,8 @@ use axum::{
 };
 use futures::stream::StreamExt;
 use hex::FromHex;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -111,6 +113,10 @@ impl DockerRegistry {
             .route(
                 "/v2/:repository/:image/manifests/:reference",
                 put(manifest_put),
+            )
+            .route(
+                "/v2/:repository/:image/manifests/:reference",
+                get(manifest_get),
             )
             .with_state(self)
     }
@@ -216,10 +222,30 @@ struct UploadId {
     upload: Uuid,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
+
 struct ImageDigest {
-    #[serde(deserialize_with = "deserialize_sha256_hexdigest")]
     digest: storage::Digest,
+}
+
+impl Serialize for ImageDigest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let full = format!("sha256:{}", self.digest);
+        full.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ImageDigest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = <&str>::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 impl ImageDigest {
@@ -228,37 +254,48 @@ impl ImageDigest {
     }
 }
 
+#[derive(Debug, Error)]
+enum ImageDigestParseError {
+    #[error("wrong length")]
+    WrongLength,
+    #[error("wrong prefix")]
+    WrongPrefix,
+    #[error("hex decoding error")]
+    HexDecodeError,
+}
+
+impl FromStr for ImageDigest {
+    type Err = ImageDigestParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        const SHA256_LEN: usize = 32;
+        const PREFIX_LEN: usize = 7;
+        const DIGEST_HEX_LEN: usize = SHA256_LEN * 2;
+
+        if raw.len() != PREFIX_LEN + DIGEST_HEX_LEN {
+            return Err(ImageDigestParseError::WrongLength);
+        }
+
+        if !raw.starts_with("sha256:") {
+            return Err(ImageDigestParseError::WrongPrefix);
+        }
+
+        let hex_encoded = &raw[PREFIX_LEN..];
+        debug_assert_eq!(hex_encoded.len(), DIGEST_HEX_LEN);
+
+        let digest = <[u8; SHA256_LEN]>::from_hex(hex_encoded)
+            .map_err(|_| ImageDigestParseError::HexDecodeError)?;
+
+        Ok(Self {
+            digest: storage::Digest::new(digest),
+        })
+    }
+}
+
 impl Display for ImageDigest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sha256:{}", self.digest)
     }
-}
-
-const SHA256_LEN: usize = 32;
-
-fn deserialize_sha256_hexdigest<'de, D>(deserializer: D) -> Result<storage::Digest, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    const PREFIX_LEN: usize = 7;
-    const DIGEST_HEX_LEN: usize = SHA256_LEN * 2;
-
-    let raw = String::deserialize(deserializer)?;
-
-    if raw.len() != PREFIX_LEN + DIGEST_HEX_LEN {
-        return Err(serde::de::Error::custom("wrong length"));
-    }
-
-    if !raw.starts_with("sha256:") {
-        return Err(serde::de::Error::custom("wrong prefix"));
-    }
-
-    let hex_encoded = &raw[PREFIX_LEN..];
-    debug_assert_eq!(hex_encoded.len(), DIGEST_HEX_LEN);
-
-    let digest = <[u8; SHA256_LEN]>::from_hex(hex_encoded).map_err(serde::de::Error::custom)?;
-
-    Ok(storage::Digest::new(digest))
 }
 
 async fn upload_add_chunk(
@@ -332,12 +369,9 @@ async fn manifest_put(
     _auth: ValidUser,
     image_manifest_json: String,
 ) -> Result<Response<Body>, AppError> {
-    // TODO: This alters the image, since it is reformatted through reserialization when passed to
-    //       storage. We may need to keep the hash of the manifest and not round-trip it instead.
-
     let digest = registry
         .storage
-        .put_manifest(&manifest_reference, &image_manifest_json)
+        .put_manifest(&manifest_reference, image_manifest_json.as_bytes())
         .await?;
 
     // TODO: Return manifest URL.
@@ -350,5 +384,26 @@ async fn manifest_put(
             ImageDigest::new(digest).to_string(),
         )
         .body(Body::empty())
+        .unwrap())
+}
+
+async fn manifest_get(
+    State(registry): State<Arc<DockerRegistry>>,
+    Path(manifest_reference): Path<ManifestReference>,
+    _auth: ValidUser,
+) -> Result<Response<Body>, AppError> {
+    let manifest_json = registry
+        .storage
+        .get_manifest(&manifest_reference)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no such manifest"))?;
+
+    let manifest: ImageManifest = serde_json::from_slice(&manifest_json)?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_LENGTH, manifest_json.len())
+        .header(CONTENT_TYPE, manifest.media_type())
+        .body(manifest_json.into())
         .unwrap())
 }

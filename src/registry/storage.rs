@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use axum::{async_trait, http::StatusCode, response::IntoResponse};
@@ -12,14 +13,14 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite};
 use uuid::Uuid;
 
-use super::types::ImageManifest;
+use super::{types::ImageManifest, ImageDigest};
 
 const SHA256_LEN: usize = 32;
 
 const BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1 MiB
 
 // TODO: Maybe use `ImageDigest` directly?
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize)]
 pub(crate) struct Digest([u8; SHA256_LEN]);
 
 impl Digest {
@@ -82,12 +83,44 @@ impl ImageLocation {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct Reference(String);
+#[derive(Debug)]
+pub(crate) enum Reference {
+    Tag(String),
+    Digest(Digest),
+}
+
+impl<'de> Deserialize<'de> for Reference {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = <&str>::deserialize(deserializer)?;
+
+        match ImageDigest::from_str(raw) {
+            Ok(digest) => Ok(Self::Digest(digest.digest)),
+            Err(_) => Ok(Self::Tag(raw.to_owned())),
+        }
+    }
+}
+
+impl Serialize for Reference {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Reference::Tag(tag) => tag.serialize(serializer),
+            Reference::Digest(digest) => ImageDigest::new(*digest).serialize(serializer),
+        }
+    }
+}
 
 impl Reference {
-    fn name(&self) -> &str {
-        &self.0
+    fn as_tag(&self) -> Option<&str> {
+        match self {
+            Reference::Tag(tag) => Some(tag),
+            Reference::Digest(_) => None,
+        }
     }
 }
 
@@ -105,6 +138,8 @@ pub(crate) enum Error {
     BackgroundTaskPanicked(#[source] tokio::task::JoinError),
     #[error("invalid image manifest")]
     InvalidManifest(#[source] serde_json::Error),
+    #[error("cannot store manifest under hash")]
+    NotATag,
 }
 
 impl IntoResponse for Error {
@@ -112,7 +147,7 @@ impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         match self {
             Error::UploadDoesNotExit => StatusCode::NOT_FOUND.into_response(),
-            Error::InvalidManifest(_) => StatusCode::BAD_REQUEST.into_response(),
+            Error::InvalidManifest(_) | Error::NotATag => StatusCode::BAD_REQUEST.into_response(),
             Error::DigestMismatch | Error::Io(_) | Error::BackgroundTaskPanicked(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
@@ -163,12 +198,15 @@ pub(crate) trait RegistryStorage: Send + Sync {
 
     async fn cancel_upload(&self, upload: Uuid) -> Result<(), Error>;
 
-    async fn get_manifest(&self, location: &ImageLocation) -> Result<Option<Vec<u8>>, Error>;
+    async fn get_manifest(
+        &self,
+        manifest_reference: &ManifestReference,
+    ) -> Result<Option<Vec<u8>>, Error>;
 
     async fn put_manifest(
         &self,
         manifest_reference: &ManifestReference,
-        manifest: &str,
+        manifest: &[u8],
     ) -> Result<Digest, Error>;
 }
 
@@ -220,11 +258,11 @@ impl FilesystemStorage {
         self.rel_manifest_to_blobs.join(format!("{}", digest))
     }
 
-    fn tag_path(&self, manifest_reference: &ManifestReference) -> PathBuf {
+    fn tag_path(&self, location: &ImageLocation, tag: &str) -> PathBuf {
         self.tags
-            .join(manifest_reference.location().repository())
-            .join(manifest_reference.location().image())
-            .join(manifest_reference.reference().name())
+            .join(location.repository())
+            .join(location.image())
+            .join(tag)
     }
 
     fn temp_tag_path(&self) -> PathBuf {
@@ -363,24 +401,43 @@ impl RegistryStorage for FilesystemStorage {
         todo!()
     }
 
-    async fn get_manifest(&self, _location: &ImageLocation) -> Result<Option<Vec<u8>>, Error> {
-        todo!()
+    async fn get_manifest(
+        &self,
+        manifest_reference: &ManifestReference,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        let manifest_path = match manifest_reference.reference() {
+            Reference::Tag(ref tag) => self.tag_path(manifest_reference.location(), tag),
+            Reference::Digest(digest) => self.manifest_path(*digest),
+        };
+
+        match tokio::fs::read(manifest_path).await {
+            Ok(data) => Ok(Some(data)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Error::Io(e)),
+        }
     }
 
     async fn put_manifest(
         &self,
         manifest_reference: &ManifestReference,
-        manifest: &str,
+        manifest: &[u8],
     ) -> Result<Digest, Error> {
         // TODO: Validate all blobs are completely uploaded.
         let _manifest: ImageManifest =
-            serde_json::from_str(manifest).map_err(Error::InvalidManifest)?;
+            serde_json::from_slice(manifest).map_err(Error::InvalidManifest)?;
 
         let digest = Digest::from_contents(manifest.as_ref());
         let dest = self.manifest_path(digest);
         tokio::fs::write(dest, &manifest).await.map_err(Error::Io)?;
 
-        let tag = self.tag_path(&manifest_reference);
+        let tag = self.tag_path(
+            manifest_reference.location(),
+            manifest_reference
+                .reference()
+                .as_tag()
+                .ok_or(Error::NotATag)?,
+        );
+
         let tag_parent = tag.parent().expect("should have parent");
 
         if !tag_parent.exists() {

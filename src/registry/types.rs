@@ -28,6 +28,12 @@ pub(crate) struct ImageManifest {
     subject: Option<ContentDescriptor>,
 }
 
+impl ImageManifest {
+    pub(crate) fn media_type(&self) -> &str {
+        self.media_type.as_ref()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ImageManifest;
