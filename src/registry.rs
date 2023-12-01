@@ -17,7 +17,9 @@ use std::{
 
 use self::{
     auth::{AuthProvider, UnverifiedCredentials, ValidUser},
-    storage::{Digest, FilesystemStorage, ImageLocation, Reference, RegistryStorage},
+    storage::{
+        Digest, FilesystemStorage, ImageLocation, ManifestReference, Reference, RegistryStorage,
+    },
     types::ImageManifest,
 };
 use axum::{
@@ -324,34 +326,18 @@ async fn upload_finalize(
         .body(Body::empty())?)
 }
 
-#[derive(Debug, Deserialize)]
-struct LocationWithReference {
-    #[serde(flatten)]
-    location: ImageLocation,
-    reference: Reference,
-}
-
 async fn manifest_put(
     State(registry): State<Arc<DockerRegistry>>,
-    Path(LocationWithReference {
-        location,
-        reference,
-    }): Path<LocationWithReference>,
+    Path(manifest_reference): Path<ManifestReference>,
     _auth: ValidUser,
     image_manifest_json: String,
 ) -> Result<Response<Body>, AppError> {
     // TODO: This alters the image, since it is reformatted through reserialization when passed to
     //       storage. We may need to keep the hash of the manifest and not round-trip it instead.
 
-    let image_manifest: ImageManifest =
-        serde_json::from_str(&image_manifest_json).map_err(AppError::from)?;
-
-    // TODO: This is the hash the client actually expects returned:
-    dbg!(ImageDigest::new(Digest::from_contents(image_manifest_json.as_ref())).to_string());
-
     let digest = registry
         .storage
-        .put_manifest(&location, &reference, &image_manifest)
+        .put_manifest(&manifest_reference, &image_manifest_json)
         .await?;
 
     // TODO: Return manifest URL.

@@ -6,7 +6,7 @@ use std::{
 };
 
 use axum::{async_trait, http::StatusCode, response::IntoResponse};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Digest as Sha2Digest;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite};
@@ -47,11 +47,17 @@ struct LayerManifest {
     blob_sum: String,
 }
 
-// TODO: Remove `Deserialize`, should not leak into `storage` module.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ImageLocation {
     repository: String,
     image: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct ManifestReference {
+    #[serde(flatten)]
+    location: ImageLocation,
+    reference: Reference,
 }
 
 impl ImageLocation {
@@ -66,7 +72,7 @@ impl ImageLocation {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct Reference(String);
 
 impl Reference {
@@ -87,6 +93,8 @@ pub(crate) enum Error {
     Io(io::Error),
     #[error("background task panicked")]
     BackgroundTaskPanicked(#[source] tokio::task::JoinError),
+    #[error("invalid image manifest")]
+    InvalidManifest(#[source] serde_json::Error),
 }
 
 impl IntoResponse for Error {
@@ -94,6 +102,7 @@ impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         match self {
             Error::UploadDoesNotExit => StatusCode::NOT_FOUND.into_response(),
+            Error::InvalidManifest(_) => StatusCode::BAD_REQUEST.into_response(),
             Error::DigestMismatch | Error::Io(_) | Error::BackgroundTaskPanicked(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
@@ -148,9 +157,8 @@ pub(crate) trait RegistryStorage: Send + Sync {
 
     async fn put_manifest(
         &self,
-        location: &ImageLocation,
-        reference: &Reference,
-        manifest: &ImageManifest,
+        manifest_reference: &ManifestReference,
+        manifest: &str,
     ) -> Result<Digest, Error>;
 }
 
@@ -195,11 +203,8 @@ impl FilesystemStorage {
         self.uploads.join(format!("{}.partial", upload))
     }
 
-    fn manifest_path(&self, location: &ImageLocation, reference: &Reference) -> PathBuf {
-        self.manifests
-            .join(location.repository())
-            .join(location.image())
-            .join(reference.name())
+    fn manifest_path(&self, digest: Digest) -> PathBuf {
+        self.manifests.join(format!("{}", digest))
     }
 }
 
@@ -340,25 +345,21 @@ impl RegistryStorage for FilesystemStorage {
 
     async fn put_manifest(
         &self,
-        location: &ImageLocation,
-        reference: &Reference,
-        manifest: &ImageManifest,
+        manifest_reference: &ManifestReference,
+        manifest: &str,
     ) -> Result<Digest, Error> {
         // TODO: Validate all blobs are completely uploaded.
+        let _manifest: ImageManifest =
+            serde_json::from_str(manifest).map_err(Error::InvalidManifest)?;
 
-        let dest = self.manifest_path(&location, &reference);
-        let parent = dest.parent().expect("must have parent");
+        let digest = Digest::from_contents(manifest.as_ref());
 
-        if !parent.exists() {
-            tokio::fs::create_dir_all(parent).await.map_err(Error::Io)?;
-        }
+        let dest = self.manifest_path(digest);
 
-        let contents =
-            serde_json::to_string_pretty(manifest).expect("manifest should always be serializable");
+        tokio::fs::write(dest, &manifest).await.map_err(Error::Io)?;
 
-        // TODO: Symlink and instead store manifest as content addressed?
-        tokio::fs::write(dest, &contents).await.map_err(Error::Io)?;
+        // TODO: Symlink, store manifest pointer.
 
-        Ok(Digest::from_contents(contents.as_ref()))
+        Ok(digest)
     }
 }
