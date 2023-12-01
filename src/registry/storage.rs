@@ -60,6 +60,16 @@ pub(crate) struct ManifestReference {
     reference: Reference,
 }
 
+impl ManifestReference {
+    pub(crate) fn location(&self) -> &ImageLocation {
+        &self.location
+    }
+
+    pub(crate) fn reference(&self) -> &Reference {
+        &self.reference
+    }
+}
+
 impl ImageLocation {
     #[inline(always)]
     pub(crate) fn repository(&self) -> &str {
@@ -167,6 +177,8 @@ pub(crate) struct FilesystemStorage {
     uploads: PathBuf,
     blobs: PathBuf,
     manifests: PathBuf,
+    tags: PathBuf,
+    rel_manifest_to_blobs: PathBuf,
 }
 
 impl FilesystemStorage {
@@ -176,24 +188,21 @@ impl FilesystemStorage {
         let uploads = root.join("uploads");
         let blobs = root.join("blobs");
         let manifests = root.join("manifests");
+        let tags = root.join("tags");
+        let rel_manifest_to_blobs = PathBuf::from("../../../manifests");
 
-        // Create necessary subpaths.
-        if !uploads.exists() {
-            fs::create_dir(&uploads)?;
-        }
-
-        if !blobs.exists() {
-            fs::create_dir(&blobs)?;
-        }
-
-        if !manifests.exists() {
-            fs::create_dir(&manifests)?;
+        for dir in [&uploads, &blobs, &manifests, &tags] {
+            if !dir.exists() {
+                fs::create_dir(&dir)?;
+            }
         }
 
         Ok(FilesystemStorage {
             uploads,
             blobs,
             manifests,
+            tags,
+            rel_manifest_to_blobs,
         })
     }
     fn blob_path(&self, digest: Digest) -> PathBuf {
@@ -205,6 +214,17 @@ impl FilesystemStorage {
 
     fn manifest_path(&self, digest: Digest) -> PathBuf {
         self.manifests.join(format!("{}", digest))
+    }
+
+    fn blob_rel_path(&self, digest: Digest) -> PathBuf {
+        self.rel_manifest_to_blobs.join(format!("{}", digest))
+    }
+
+    fn tag_path(&self, manifest_reference: &ManifestReference) -> PathBuf {
+        self.tags
+            .join(manifest_reference.location().repository())
+            .join(manifest_reference.location().image())
+            .join(manifest_reference.reference().name())
     }
 }
 
@@ -353,12 +373,21 @@ impl RegistryStorage for FilesystemStorage {
             serde_json::from_str(manifest).map_err(Error::InvalidManifest)?;
 
         let digest = Digest::from_contents(manifest.as_ref());
-
         let dest = self.manifest_path(digest);
-
         tokio::fs::write(dest, &manifest).await.map_err(Error::Io)?;
 
-        // TODO: Symlink, store manifest pointer.
+        let tag = self.tag_path(&manifest_reference);
+        let tag_parent = tag.parent().expect("should have parent");
+
+        if !tag_parent.exists() {
+            tokio::fs::create_dir_all(tag_parent)
+                .await
+                .map_err(Error::Io)?;
+        }
+
+        tokio::fs::symlink(self.blob_rel_path(digest), tag)
+            .await
+            .map_err(Error::Io)?;
 
         Ok(digest)
     }
