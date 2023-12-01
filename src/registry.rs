@@ -54,12 +54,18 @@ use uuid::Uuid;
 // }
 
 #[derive(Debug)]
-struct AppError(anyhow::Error);
+enum AppError {
+    NotFound,
+    Internal(anyhow::Error),
+}
 
 impl Display for AppError {
     #[inline(always)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.0, f)
+        match self {
+            AppError::NotFound => f.write_str("missing item"),
+            AppError::Internal(err) => Display::fmt(err, f),
+        }
     }
 }
 
@@ -69,14 +75,19 @@ where
 {
     #[inline(always)]
     fn from(err: E) -> Self {
-        AppError(err.into())
+        AppError::Internal(err.into())
     }
 }
 
 impl IntoResponse for AppError {
     #[inline(always)]
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()).into_response()
+        match self {
+            AppError::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
+            AppError::Internal(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
+            }
+        }
     }
 }
 
@@ -101,6 +112,7 @@ impl DockerRegistry {
         Router::new()
             .route("/v2/", get(index_v2))
             .route("/v2/:repository/:image/blobs/:digest", head(blob_check))
+            .route("/v2/:repository/:image/blobs/:digest", get(blob_get))
             .route("/v2/:repository/:image/blobs/uploads/", post(upload_new))
             .route(
                 "/v2/:repository/:image/uploads/:upload",
@@ -148,7 +160,7 @@ async fn index_v2(
 
 async fn blob_check(
     State(registry): State<Arc<DockerRegistry>>,
-    Path(image): Path<ImageDigest>,
+    Path((_, _, image)): Path<(String, String, ImageDigest)>,
     _auth: ValidUser,
 ) -> Result<Response, AppError> {
     if let Some(metadata) = registry.storage.get_blob_metadata(image.digest).await? {
@@ -165,6 +177,28 @@ async fn blob_check(
             .body(Body::empty())
             .unwrap())
     }
+}
+
+async fn blob_get(
+    State(registry): State<Arc<DockerRegistry>>,
+    Path((_, _, image)): Path<(String, String, ImageDigest)>,
+    _auth: ValidUser,
+) -> Result<Response, AppError> {
+    // TODO: Get size for `Content-length` header.
+
+    let reader = registry
+        .storage
+        .get_blob_reader(image.digest)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let stream = ReaderStream::new(reader);
+    let body = Body::from_stream(stream);
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .body(body)
+        .unwrap())
 }
 
 async fn upload_new(
@@ -331,11 +365,15 @@ async fn upload_add_chunk(
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct DigestQuery {
+    digest: ImageDigest,
+}
+
 async fn upload_finalize(
     State(registry): State<Arc<DockerRegistry>>,
-    //Path(location): Path<ImageLocation>,
-    Path(UploadId { upload }): Path<UploadId>,
-    Query(image_digest): Query<ImageDigest>,
+    Path((_, _, upload)): Path<(String, String, Uuid)>,
+    Query(DigestQuery { digest }): Query<DigestQuery>,
     _auth: ValidUser,
     request: axum::extract::Request,
 ) -> Result<Response<Body>, AppError> {
@@ -354,12 +392,12 @@ async fn upload_finalize(
 
     registry
         .storage
-        .finalize_upload(upload, image_digest.digest)
+        .finalize_upload(upload, digest.digest)
         .await?;
 
     Ok(Response::builder()
         .status(StatusCode::CREATED)
-        .header("Docker-Content-Digest", image_digest.to_string())
+        .header("Docker-Content-Digest", digest.to_string())
         .body(Body::empty())?)
 }
 
