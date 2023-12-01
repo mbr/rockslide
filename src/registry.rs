@@ -484,6 +484,40 @@ mod tests {
     // TODO: Test that checks authentication works.
 
     #[tokio::test]
+    async fn refuses_access_without_valid_credentials() {
+        let (ctx, mut service) = mk_test_app();
+        let app = service.ready().await.expect("could not launch service");
+
+        let targets = [("GET", "/v2/")];
+        // TODO: Verify all endpoints return `UNAUTHORIZED` without credentials.
+
+        for (method, endpoint) in targets.into_iter() {
+            // API should refuse requests without credentials.
+            let response = app
+                .call(Request::builder().uri("/v2/").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+            // Wrong credentials should also not grant access.
+            // TODO: Invalid credentials.
+
+            // Finally a valid set should grant access.
+            let response = app
+                .call(
+                    Request::builder()
+                        .uri("/v2/")
+                        .header(AUTHORIZATION, ctx.basic_auth())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(response.status(), StatusCode::UNAUTHORIZED)
+        }
+    }
+
+    //#[tokio::test]
     async fn upload_image() {
         let (ctx, mut service) = mk_test_app();
 
