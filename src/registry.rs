@@ -465,7 +465,10 @@ mod tests {
     use tower::{util::ServiceExt, Service};
     use tower_http::trace::TraceLayer;
 
-    use crate::registry::ImageDigest;
+    use crate::registry::{
+        storage::{ImageLocation, ManifestReference, Reference},
+        ImageDigest,
+    };
 
     use super::DockerRegistry;
 
@@ -550,11 +553,19 @@ mod tests {
         let app = service.ready().await.expect("could not launch service");
 
         // Fixtures.
-        let raw = include_bytes!(
+        let raw_image = include_bytes!(
             "../fixtures/596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
         );
-        let expected_digest: ImageDigest =
+        let raw_manifest = include_bytes!(
+            "../fixtures/9ce67038e4f1297a0b1ce23be1b768ce3649fe9bd496ba8efe9ec1676d153430"
+        );
+
+        let image_digest: ImageDigest =
             "sha256:596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
+                .parse()
+                .unwrap();
+        let manifest_digest: ImageDigest =
+            "sha256:9ce67038e4f1297a0b1ce23be1b768ce3649fe9bd496ba8efe9ec1676d153430"
                 .parse()
                 .unwrap();
 
@@ -583,7 +594,7 @@ mod tests {
 
         // Step 2: PATCH blobs.
         let mut sent = 0;
-        for chunk in raw.chunks(32) {
+        for chunk in raw_image.chunks(32) {
             assert!(!chunk.is_empty());
             let range = format!("{sent}-{}", chunk.len() - 1);
             sent += chunk.len();
@@ -611,7 +622,7 @@ mod tests {
                 Request::builder()
                     .method("PUT")
                     .header(AUTHORIZATION, ctx.basic_auth())
-                    .uri(put_location + "?digest=" + expected_digest.to_string().as_str())
+                    .uri(put_location + "?digest=" + image_digest.to_string().as_str())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -620,11 +631,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
 
         // Check the blob is available after.
-        let blob_location = format!("/v2/tests/sample/blobs/{}", expected_digest);
+        let blob_location = format!("/v2/tests/sample/blobs/{}", image_digest);
         assert!(&ctx
             .registry
             .storage
-            .get_blob_reader(expected_digest.digest)
+            .get_blob_reader(image_digest.digest)
             .await
             .expect("could not access stored blob")
             .is_some());
@@ -650,11 +661,95 @@ mod tests {
                 .unwrap()
                 .to_str()
                 .unwrap(),
-            expected_digest.to_string()
+            image_digest.to_string()
         );
 
-        // TODO: Put manifest
-        // TODO: Verify manifest arrived
+        // Step 5: Upload the manifest
+        let manifest_by_tag_location = "/v2/tests/sample/manifests/latest";
+        let manifest_by_digest_location = format!("/v2/tests/sample/manifests/{}", manifest_digest);
+
+        let response = app
+            .call(
+                Request::builder()
+                    .method("PUT")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri(manifest_by_tag_location)
+                    .body(Body::from(&raw_manifest[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response
+                .headers()
+                .get("Docker-Content-Digest")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            manifest_digest.to_string()
+        );
+
+        // Should contain image under given tag.
+        assert_eq!(
+            ctx.registry
+                .storage
+                .get_manifest(&ManifestReference::new(
+                    ImageLocation::new("tests".to_owned(), "sample".to_owned()),
+                    Reference::new_tag("latest"),
+                ))
+                .await
+                .expect("failed to get reference by tag")
+                .expect("missing reference by tag"),
+            raw_manifest
+        );
+
+        assert_eq!(
+            ctx.registry
+                .storage
+                .get_manifest(&ManifestReference::new(
+                    ImageLocation::new("tests".to_owned(), "sample".to_owned()),
+                    Reference::new_digest(manifest_digest.digest),
+                ))
+                .await
+                .expect("failed to get reference by digest")
+                .expect("missing reference by digest"),
+            raw_manifest
+        );
+
+        // Step 6: Retrieve manifest via HTTP, both by tag and by digest.
+        let response = app
+            .call(
+                Request::builder()
+                    .method("GET")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri(manifest_by_tag_location)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = collect_body(response.into_body()).await;
+
+        assert_eq!(response_body, raw_manifest);
+
+        let response = app
+            .call(
+                Request::builder()
+                    .method("GET")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri(manifest_by_digest_location)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = collect_body(response.into_body()).await;
+
+        assert_eq!(response_body, raw_manifest);
     }
 
     async fn collect_body(mut body: Body) -> Vec<u8> {

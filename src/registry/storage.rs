@@ -62,6 +62,13 @@ pub(crate) struct ManifestReference {
 }
 
 impl ManifestReference {
+    pub(crate) fn new(location: ImageLocation, reference: Reference) -> Self {
+        Self {
+            location,
+            reference,
+        }
+    }
+
     pub(crate) fn location(&self) -> &ImageLocation {
         &self.location
     }
@@ -72,6 +79,10 @@ impl ManifestReference {
 }
 
 impl ImageLocation {
+    pub(crate) fn new(repository: String, image: String) -> Self {
+        Self { repository, image }
+    }
+
     #[inline(always)]
     pub(crate) fn repository(&self) -> &str {
         self.repository.as_ref()
@@ -116,6 +127,16 @@ impl Serialize for Reference {
 }
 
 impl Reference {
+    #[inline(always)]
+    pub(crate) fn new_tag<S: ToString>(s: S) -> Self {
+        Reference::Tag(s.to_string())
+    }
+
+    #[inline(always)]
+    pub(crate) fn new_digest(d: Digest) -> Self {
+        Reference::Digest(d)
+    }
+
     fn as_tag(&self) -> Option<&str> {
         match self {
             Reference::Tag(tag) => Some(tag),
