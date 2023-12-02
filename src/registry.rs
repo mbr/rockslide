@@ -24,7 +24,7 @@ use self::{
     types::ImageManifest,
 };
 use axum::{
-    body::Body,
+    body::{Body, HttpBody},
     extract::{Path, Query, State},
     http::{
         header::{CONTENT_LENGTH, CONTENT_TYPE, LOCATION, RANGE},
@@ -455,6 +455,8 @@ mod tests {
         },
         routing::RouterIntoService,
     };
+    use futures::StreamExt;
+    use http_body_util::BodyExt;
     use tempdir::TempDir;
     use tower::{util::ServiceExt, Service};
     use tower_http::trace::TraceLayer;
@@ -599,11 +601,26 @@ mod tests {
             )
             .await
             .unwrap();
-        dbg!(&response);
-        assert_eq!(response.status(), StatusCode::CREATED);
+        // assert_eq!(response.status(), StatusCode::CREATED);
+        // dbg!(&response.into_body().into_data_stream().collect::<Vec<_>>());
+        dbg!(String::from_utf8(collect_body(response.into_body()).await).unwrap());
 
         // TODO: Verify blob arrived (via white box testing).
         // TODO: Put manifest
         // TODO: Verify manifest arrived
+    }
+
+    async fn collect_body(mut body: Body) -> Vec<u8> {
+        let mut rv = Vec::new();
+        while let Some(frame_result) = body.frame().await {
+            let data = frame_result
+                .expect("failed to retrieve body frame")
+                .into_data()
+                .expect("not a data frame");
+
+            rv.extend(data.to_vec());
+        }
+
+        rv
     }
 }

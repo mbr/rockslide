@@ -24,5 +24,6 @@ tracing-subscriber = { version = "0.3.18", features = [ "env-filter" ] }
 uuid = { version = "1.6.1", features = [ "v4", "serde" ] }
 
 [dev-dependencies]
+http-body-util = "0.1.0"
 tempdir = "0.3.7"
 tower = "0.4.13"
