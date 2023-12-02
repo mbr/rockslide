@@ -386,7 +386,9 @@ async fn upload_finalize(
 
             // 0 is the only acceptable value here.
         }
-        None => return Err(anyhow::anyhow!("missing content length not implemented").into()),
+        None => {
+            // Omitting is fine, indicating no body.
+        }
     }
 
     registry
