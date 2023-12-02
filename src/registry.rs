@@ -237,7 +237,7 @@ impl IntoResponse for UploadState {
         if let Some(completed) = self.completed {
             builder = builder
                 .header(RANGE, format!("0-{}", completed))
-                .status(StatusCode::NO_CONTENT)
+                .status(StatusCode::ACCEPTED)
         } else {
             builder = builder
                 .header(CONTENT_LENGTH, 0)
@@ -449,13 +449,17 @@ async fn manifest_get(
 mod tests {
     use axum::{
         body::Body,
-        http::{header::AUTHORIZATION, Request, StatusCode},
+        http::{
+            header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, LOCATION},
+            Request, StatusCode,
+        },
         routing::RouterIntoService,
-        Router,
     };
     use tempdir::TempDir;
     use tower::{util::ServiceExt, Service};
     use tower_http::trace::TraceLayer;
+
+    use crate::registry::ImageDigest;
 
     use super::DockerRegistry;
 
@@ -482,15 +486,13 @@ mod tests {
         (Context { tmp, password }, service)
     }
 
-    // TODO: Test that checks authentication works.
-
     #[tokio::test]
     async fn refuses_access_without_valid_credentials() {
         let (ctx, mut service) = mk_test_app();
         let app = service.ready().await.expect("could not launch service");
 
         let targets = [("GET", "/v2/")];
-        // TODO: Verify all endpoints return `UNAUTHORIZED` without credentials.
+        // TODO: Verify all remaining endpoints return `UNAUTHORIZED` without credentials.
 
         for (method, endpoint) in targets.into_iter() {
             // API should refuse requests without credentials.
@@ -501,7 +503,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
             // Wrong credentials should also not grant access.
-            // TODO: Invalid credentials.
+            // TODO: Check invalid credentials are rejected.
 
             // Finally a valid set should grant access.
             let response = app
@@ -518,34 +520,84 @@ mod tests {
         }
     }
 
-    //#[tokio::test]
-    async fn upload_image() {
+    #[tokio::test]
+    async fn chunked_upload() {
+        // See https://github.com/opencontainers/distribution-spec/blob/v1.0.1/spec.md#pushing-a-blob-in-chunks
         let (ctx, mut service) = mk_test_app();
-
         let app = service.ready().await.expect("could not launch service");
 
-        // Step 1: Check if API is online.
-        let response = app
-            .call(Request::builder().uri("/v2/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-
-        // Should yield an "authorization required" prompt.
-        // TODO: Move to auth checking code.
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-        // Step 2: Login
+        // Step 1: POST for new blob upload.
         let response = app
             .call(
                 Request::builder()
-                    .uri("/v2/")
+                    .method("POST")
                     .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri("/v2/tests/sample/blobs/uploads/")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK)
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let put_location = response
+            .headers()
+            .get(LOCATION)
+            .expect("expected location header for blob upload")
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        // Step 2: PATCH blobs.
+        let raw = include_bytes!(
+            "../fixtures/596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
+        );
+
+        let mut sent = 0;
+        for chunk in raw.chunks(32) {
+            assert!(!chunk.is_empty());
+            let range = format!("{sent}-{}", chunk.len() - 1);
+            sent += chunk.len();
+
+            let response = app
+                .call(
+                    Request::builder()
+                        .method("PATCH")
+                        .header(AUTHORIZATION, ctx.basic_auth())
+                        .header(CONTENT_LENGTH, chunk.len())
+                        .header(CONTENT_RANGE, range)
+                        .uri(&put_location)
+                        .body(Body::from(chunk))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+
+        // Step 3: PUT without (!) final body -- we do not support putting the final piece in `PUT`.
+        let expected_digest: ImageDigest =
+            "sha256:596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
+                .parse()
+                .unwrap();
+        let response = app
+            .call(
+                Request::builder()
+                    .method("PUT")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri(put_location + "?digest=" + expected_digest.to_string().as_str())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        dbg!(&response);
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // TODO: Verify blob arrived (via white box testing).
+        // TODO: Put manifest
+        // TODO: Verify manifest arrived
     }
 }
