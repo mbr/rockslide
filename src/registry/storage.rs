@@ -24,7 +24,7 @@ const BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1 MiB
 pub(crate) struct Digest([u8; SHA256_LEN]);
 
 impl Digest {
-    pub(crate) fn new(bytes: [u8; SHA256_LEN]) -> Self {
+    pub(crate) const fn new(bytes: [u8; SHA256_LEN]) -> Self {
         Self(bytes)
     }
 

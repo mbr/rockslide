@@ -282,7 +282,8 @@ impl<'de> Deserialize<'de> for ImageDigest {
 }
 
 impl ImageDigest {
-    fn new(digest: storage::Digest) -> Self {
+    #[inline(always)]
+    pub const fn new(digest: storage::Digest) -> Self {
         Self { digest }
     }
 }
@@ -470,7 +471,7 @@ mod tests {
         ImageDigest,
     };
 
-    use super::DockerRegistry;
+    use super::{storage::Digest, DockerRegistry};
 
     struct Context {
         tmp: TempDir,
@@ -546,28 +547,31 @@ mod tests {
         }
     }
 
+    // Fixtures.
+    const RAW_IMAGE: &[u8] = include_bytes!(
+        "../fixtures/596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
+    );
+    const RAW_MANIFEST: &[u8] = include_bytes!(
+        "../fixtures/9ce67038e4f1297a0b1ce23be1b768ce3649fe9bd496ba8efe9ec1676d153430"
+    );
+
+    const IMAGE_DIGEST: ImageDigest = ImageDigest::new(Digest::new([
+        0x59, 0x6a, 0x7d, 0x87, 0x7b, 0x33, 0x56, 0x9d, 0x19, 0x90, 0x46, 0xaa, 0xf2, 0x93, 0xec,
+        0xf4, 0x50, 0x26, 0x44, 0x5b, 0xe3, 0x6d, 0xe1, 0x81, 0x8d, 0x50, 0xb4, 0xf1, 0x85, 0x07,
+        0x62, 0xad,
+    ]));
+
+    const MANIFEST_DIGEST: ImageDigest = ImageDigest::new(Digest::new([
+        0x9c, 0xe6, 0x70, 0x38, 0xe4, 0xf1, 0x29, 0x7a, 0x0b, 0x1c, 0xe2, 0x3b, 0xe1, 0xb7, 0x68,
+        0xce, 0x36, 0x49, 0xfe, 0x9b, 0xd4, 0x96, 0xba, 0x8e, 0xfe, 0x9e, 0xc1, 0x67, 0x6d, 0x15,
+        0x34, 0x30,
+    ]));
+
     #[tokio::test]
     async fn chunked_upload() {
         // See https://github.com/opencontainers/distribution-spec/blob/v1.0.1/spec.md#pushing-a-blob-in-chunks
         let (ctx, mut service) = mk_test_app();
         let app = service.ready().await.expect("could not launch service");
-
-        // Fixtures.
-        let raw_image = include_bytes!(
-            "../fixtures/596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
-        );
-        let raw_manifest = include_bytes!(
-            "../fixtures/9ce67038e4f1297a0b1ce23be1b768ce3649fe9bd496ba8efe9ec1676d153430"
-        );
-
-        let image_digest: ImageDigest =
-            "sha256:596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
-                .parse()
-                .unwrap();
-        let manifest_digest: ImageDigest =
-            "sha256:9ce67038e4f1297a0b1ce23be1b768ce3649fe9bd496ba8efe9ec1676d153430"
-                .parse()
-                .unwrap();
 
         // Step 1: POST for new blob upload.
         let response = app
@@ -594,7 +598,7 @@ mod tests {
 
         // Step 2: PATCH blobs.
         let mut sent = 0;
-        for chunk in raw_image.chunks(32) {
+        for chunk in RAW_IMAGE.chunks(32) {
             assert!(!chunk.is_empty());
             let range = format!("{sent}-{}", chunk.len() - 1);
             sent += chunk.len();
@@ -622,7 +626,7 @@ mod tests {
                 Request::builder()
                     .method("PUT")
                     .header(AUTHORIZATION, ctx.basic_auth())
-                    .uri(put_location + "?digest=" + image_digest.to_string().as_str())
+                    .uri(put_location + "?digest=" + IMAGE_DIGEST.to_string().as_str())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -631,11 +635,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
 
         // Check the blob is available after.
-        let blob_location = format!("/v2/tests/sample/blobs/{}", image_digest);
+        let blob_location = format!("/v2/tests/sample/blobs/{}", IMAGE_DIGEST);
         assert!(&ctx
             .registry
             .storage
-            .get_blob_reader(image_digest.digest)
+            .get_blob_reader(IMAGE_DIGEST.digest)
             .await
             .expect("could not access stored blob")
             .is_some());
@@ -661,12 +665,12 @@ mod tests {
                 .unwrap()
                 .to_str()
                 .unwrap(),
-            image_digest.to_string()
+            IMAGE_DIGEST.to_string()
         );
 
         // Step 5: Upload the manifest
         let manifest_by_tag_location = "/v2/tests/sample/manifests/latest";
-        let manifest_by_digest_location = format!("/v2/tests/sample/manifests/{}", manifest_digest);
+        let manifest_by_digest_location = format!("/v2/tests/sample/manifests/{}", MANIFEST_DIGEST);
 
         let response = app
             .call(
@@ -674,7 +678,7 @@ mod tests {
                     .method("PUT")
                     .header(AUTHORIZATION, ctx.basic_auth())
                     .uri(manifest_by_tag_location)
-                    .body(Body::from(&raw_manifest[..]))
+                    .body(Body::from(&RAW_MANIFEST[..]))
                     .unwrap(),
             )
             .await
@@ -688,7 +692,7 @@ mod tests {
                 .unwrap()
                 .to_str()
                 .unwrap(),
-            manifest_digest.to_string()
+            MANIFEST_DIGEST.to_string()
         );
 
         // Should contain image under given tag.
@@ -702,7 +706,7 @@ mod tests {
                 .await
                 .expect("failed to get reference by tag")
                 .expect("missing reference by tag"),
-            raw_manifest
+            RAW_MANIFEST
         );
 
         assert_eq!(
@@ -710,12 +714,12 @@ mod tests {
                 .storage
                 .get_manifest(&ManifestReference::new(
                     ImageLocation::new("tests".to_owned(), "sample".to_owned()),
-                    Reference::new_digest(manifest_digest.digest),
+                    Reference::new_digest(MANIFEST_DIGEST.digest),
                 ))
                 .await
                 .expect("failed to get reference by digest")
                 .expect("missing reference by digest"),
-            raw_manifest
+            RAW_MANIFEST
         );
 
         // Step 6: Retrieve manifest via HTTP, both by tag and by digest.
@@ -733,7 +737,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let response_body = collect_body(response.into_body()).await;
 
-        assert_eq!(response_body, raw_manifest);
+        assert_eq!(response_body, RAW_MANIFEST);
 
         let response = app
             .call(
@@ -749,7 +753,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let response_body = collect_body(response.into_body()).await;
 
-        assert_eq!(response_body, raw_manifest);
+        assert_eq!(response_body, RAW_MANIFEST);
     }
 
     async fn collect_body(mut body: Body) -> Vec<u8> {
