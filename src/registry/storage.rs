@@ -196,10 +196,6 @@ impl BlobMetadata {
 pub(crate) trait RegistryStorage: Send + Sync {
     async fn begin_new_upload(&self) -> Result<Uuid, Error>;
 
-    async fn get_upload_progress(&self, upload: Uuid) -> Result<usize, Error>;
-
-    async fn get_allocated_size(&self, upload: Uuid) -> Result<usize, Error>;
-
     async fn get_blob_reader(
         &self,
         digest: Digest,
@@ -207,17 +203,13 @@ pub(crate) trait RegistryStorage: Send + Sync {
 
     async fn get_blob_metadata(&self, digest: Digest) -> Result<Option<BlobMetadata>, Error>;
 
-    async fn allocate_upload(&self, upload: Uuid) -> Result<usize, Error>;
-
-    async fn get_writer(
+    async fn get_upload_writer(
         &self,
         start_at: u64,
         upload: Uuid,
     ) -> Result<Box<dyn AsyncWrite + Send + Unpin>, Error>;
 
     async fn finalize_upload(&self, upload: Uuid, hash: Digest) -> Result<(), Error>;
-
-    async fn cancel_upload(&self, upload: Uuid) -> Result<(), Error>;
 
     async fn get_manifest(
         &self,
@@ -302,13 +294,6 @@ impl RegistryStorage for FilesystemStorage {
 
         Ok(upload)
     }
-    async fn get_upload_progress(&self, _upload: Uuid) -> Result<usize, Error> {
-        todo!()
-    }
-
-    async fn get_allocated_size(&self, _upload: Uuid) -> Result<usize, Error> {
-        todo!()
-    }
 
     async fn get_blob_metadata(&self, digest: Digest) -> Result<Option<BlobMetadata>, Error> {
         let blob_path = self.blob_path(digest);
@@ -340,11 +325,7 @@ impl RegistryStorage for FilesystemStorage {
         Ok(Some(Box::new(reader)))
     }
 
-    async fn allocate_upload(&self, _upload: Uuid) -> Result<usize, Error> {
-        todo!()
-    }
-
-    async fn get_writer(
+    async fn get_upload_writer(
         &self,
         start_at: u64,
         upload: Uuid,
@@ -416,10 +397,6 @@ impl RegistryStorage for FilesystemStorage {
 
         // All good.
         Ok(())
-    }
-
-    async fn cancel_upload(&self, _upload: Uuid) -> Result<(), Error> {
-        todo!()
     }
 
     async fn get_manifest(

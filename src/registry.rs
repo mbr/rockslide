@@ -344,7 +344,7 @@ async fn upload_add_chunk(
         return Err(anyhow::anyhow!("unsupport feature: chunked uploads").into());
     }
 
-    let mut writer = registry.storage.get_writer(0, upload).await?;
+    let mut writer = registry.storage.get_upload_writer(0, upload).await?;
 
     // We'll get the entire file in one go, no range header == monolithic uploads.
     let mut body = request.into_body().into_data_stream();
@@ -754,6 +754,14 @@ mod tests {
         let response_body = collect_body(response.into_body()).await;
 
         assert_eq!(response_body, RAW_MANIFEST);
+    }
+
+    #[tokio::test]
+    async fn image_download() {
+        let (ctx, mut service) = mk_test_app();
+        let app = service.ready().await.expect("could not launch service");
+
+        //ctx.registry.storage.(manifest_reference, manifest)
     }
 
     async fn collect_body(mut body: Body) -> Vec<u8> {
