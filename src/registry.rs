@@ -497,7 +497,13 @@ mod tests {
         for (method, endpoint) in targets.into_iter() {
             // API should refuse requests without credentials.
             let response = app
-                .call(Request::builder().uri("/v2/").body(Body::empty()).unwrap())
+                .call(
+                    Request::builder()
+                        .method(method)
+                        .uri(endpoint)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
