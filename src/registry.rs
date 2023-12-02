@@ -603,9 +603,7 @@ mod tests {
             )
             .await
             .unwrap();
-        // assert_eq!(response.status(), StatusCode::CREATED);
-        // dbg!(&response.into_body().into_data_stream().collect::<Vec<_>>());
-        dbg!(String::from_utf8(collect_body(response.into_body()).await).unwrap());
+        assert_eq!(response.status(), StatusCode::CREATED);
 
         // TODO: Verify blob arrived (via white box testing).
         // TODO: Put manifest
