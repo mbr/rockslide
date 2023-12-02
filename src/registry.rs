@@ -582,7 +582,6 @@ mod tests {
             .to_owned();
 
         // Step 2: PATCH blobs.
-
         let mut sent = 0;
         for chunk in raw.chunks(32) {
             assert!(!chunk.is_empty());
@@ -620,6 +619,8 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
 
+        // Check the blob is available after.
+        let blob_location = format!("/v2/tests/sample/blobs/{}", expected_digest);
         assert!(&ctx
             .registry
             .storage
@@ -627,6 +628,30 @@ mod tests {
             .await
             .expect("could not access stored blob")
             .is_some());
+
+        // Step 4: Client verifies existence of blob through `HEAD` request.
+        let response = app
+            .call(
+                Request::builder()
+                    .method("HEAD")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri(blob_location)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("Docker-Content-Digest")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            expected_digest.to_string()
+        );
 
         // TODO: Put manifest
         // TODO: Verify manifest arrived
