@@ -664,7 +664,6 @@ mod tests {
 
         // Step 5: Upload the manifest
         let manifest_by_tag_location = "/v2/tests/sample/manifests/latest";
-        let manifest_by_digest_location = format!("/v2/tests/sample/manifests/{}", MANIFEST_DIGEST);
 
         let response = app
             .call(
@@ -715,8 +714,52 @@ mod tests {
                 .expect("missing reference by digest"),
             RAW_MANIFEST
         );
+    }
 
-        // Step 6: Retrieve manifest via HTTP, both by tag and by digest.
+    #[tokio::test]
+    async fn image_download() {
+        let (ctx, mut service) = mk_test_app();
+        let app = service.ready().await.expect("could not launch service");
+
+        let manifest_ref_by_tag = ManifestReference::new(
+            ImageLocation::new("tests".to_owned(), "sample".to_owned()),
+            Reference::new_tag("latest"),
+        );
+
+        let manifest_by_tag_location = "/v2/tests/sample/manifests/latest";
+        let manifest_by_digest_location = format!("/v2/tests/sample/manifests/{}", MANIFEST_DIGEST);
+
+        // Insert blob data.
+        let upload = ctx
+            .registry
+            .storage
+            .begin_new_upload()
+            .await
+            .expect("could not start upload");
+        let mut writer = ctx
+            .registry
+            .storage
+            .get_upload_writer(0, upload)
+            .await
+            .expect("could not create upload writer");
+        writer
+            .write_all(RAW_IMAGE)
+            .await
+            .expect("failed to write image blob");
+        ctx.registry
+            .storage
+            .finalize_upload(upload, IMAGE_DIGEST.digest)
+            .await
+            .expect("failed to finalize upload");
+
+        // Insert manifest data.
+        ctx.registry
+            .storage
+            .put_manifest(&manifest_ref_by_tag, RAW_MANIFEST)
+            .await
+            .expect("failed to store manifest");
+
+        // Retrieve manifest via HTTP, both by tag and by digest.
         let response = app
             .call(
                 Request::builder()
@@ -748,14 +791,42 @@ mod tests {
         let response_body = collect_body(response.into_body()).await;
 
         assert_eq!(response_body, RAW_MANIFEST);
+
+        // Download blob.
+        let response = app
+            .call(
+                Request::builder()
+                    .method("GET")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri(format!("/v2/testing/sample/blobs/{}", IMAGE_DIGEST))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = collect_body(response.into_body()).await;
+        assert_eq!(response_body, RAW_IMAGE);
     }
 
     #[tokio::test]
-    async fn image_download() {
+    async fn missing_manifest_returns_404() {
         let (ctx, mut service) = mk_test_app();
         let app = service.ready().await.expect("could not launch service");
 
-        //ctx.registry.storage.(manifest_reference, manifest)
+        let response = app
+            .call(
+                Request::builder()
+                    .method("GET")
+                    .header(AUTHORIZATION, ctx.basic_auth())
+                    .uri("/v2/doesnot/exist/manifests/latest")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     async fn collect_body(mut body: Body) -> Vec<u8> {
