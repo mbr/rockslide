@@ -449,6 +449,8 @@ async fn manifest_get(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use axum::{
         body::Body,
         http::{
@@ -470,6 +472,7 @@ mod tests {
     struct Context {
         tmp: TempDir,
         password: String,
+        registry: Arc<DockerRegistry>,
     }
 
     impl Context {
@@ -482,12 +485,22 @@ mod tests {
         let tmp = TempDir::new("rockslide-test").expect("could not create temporary directory");
 
         let registry = DockerRegistry::new(tmp.as_ref());
-        let router = registry.make_router().layer(TraceLayer::new_for_http());
+        let router = registry
+            .clone()
+            .make_router()
+            .layer(TraceLayer::new_for_http());
         let password = "asdf - FIXME, implement actual auth".to_owned();
 
         let service = router.into_service::<Body>();
 
-        (Context { tmp, password }, service)
+        (
+            Context {
+                registry,
+                tmp,
+                password,
+            },
+            service,
+        )
     }
 
     #[tokio::test]
@@ -536,6 +549,15 @@ mod tests {
         let (ctx, mut service) = mk_test_app();
         let app = service.ready().await.expect("could not launch service");
 
+        // Fixtures.
+        let raw = include_bytes!(
+            "../fixtures/596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
+        );
+        let expected_digest: ImageDigest =
+            "sha256:596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
+                .parse()
+                .unwrap();
+
         // Step 1: POST for new blob upload.
         let response = app
             .call(
@@ -560,9 +582,6 @@ mod tests {
             .to_owned();
 
         // Step 2: PATCH blobs.
-        let raw = include_bytes!(
-            "../fixtures/596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
-        );
 
         let mut sent = 0;
         for chunk in raw.chunks(32) {
@@ -588,10 +607,6 @@ mod tests {
         }
 
         // Step 3: PUT without (!) final body -- we do not support putting the final piece in `PUT`.
-        let expected_digest: ImageDigest =
-            "sha256:596a7d877b33569d199046aaf293ecf45026445be36de1818d50b4f1850762ad"
-                .parse()
-                .unwrap();
         let response = app
             .call(
                 Request::builder()
@@ -605,7 +620,14 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        // TODO: Verify blob arrived (via white box testing).
+        assert!(&ctx
+            .registry
+            .storage
+            .get_blob_reader(expected_digest.digest)
+            .await
+            .expect("could not access stored blob")
+            .is_some());
+
         // TODO: Put manifest
         // TODO: Verify manifest arrived
     }
