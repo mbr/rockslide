@@ -21,7 +21,7 @@ use self::{
     storage::{
         Digest, FilesystemStorage, ImageLocation, ManifestReference, Reference, RegistryStorage,
     },
-    types::ImageManifest,
+    types::{ImageManifest, OciError, OciErrors},
 };
 use axum::{
     body::{Body, HttpBody},
@@ -41,17 +41,6 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
-
-// TODO: Return error as:
-// {
-//     "errors:" [{
-//             "code": <error identifier>,
-//             "message": <message describing condition>,
-//             "detail": <unstructured>
-//         },
-//         ...
-//     ]
-// }
 
 #[derive(Debug)]
 enum AppError {
@@ -83,7 +72,12 @@ impl IntoResponse for AppError {
     #[inline(always)]
     fn into_response(self) -> Response {
         match self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
+            // TODO: Need better OciError handling here. Not everything is blob unknown.
+            AppError::NotFound => (
+                StatusCode::NOT_FOUND,
+                OciErrors::single(OciError::new(types::ErrorCode::BlobUnknown)),
+            )
+                .into_response(),
             AppError::Internal(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
@@ -436,7 +430,7 @@ async fn manifest_get(
         .storage
         .get_manifest(&manifest_reference)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("no such manifest"))?;
+        .ok_or(AppError::NotFound)?;
 
     let manifest: ImageManifest = serde_json::from_slice(&manifest_json)?;
 
@@ -460,9 +454,9 @@ mod tests {
         },
         routing::RouterIntoService,
     };
-    use futures::StreamExt;
     use http_body_util::BodyExt;
     use tempdir::TempDir;
+    use tokio::io::AsyncWriteExt;
     use tower::{util::ServiceExt, Service};
     use tower_http::trace::TraceLayer;
 
