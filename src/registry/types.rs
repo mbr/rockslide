@@ -81,6 +81,7 @@ impl OciError {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[allow(dead_code)]
 pub(crate) enum ErrorCode {
     BlobUnknown,
     BlobUploadInvalid,
@@ -162,6 +163,6 @@ mod tests {
             ]
         }"#;
 
-        let manifest: ImageManifest = serde_json::from_str(raw).expect("could not parse manifest");
+        let _manifest: ImageManifest = serde_json::from_str(raw).expect("could not parse manifest");
     }
 }

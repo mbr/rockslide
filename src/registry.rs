@@ -18,13 +18,11 @@ use std::{
 
 use self::{
     auth::{AuthProvider, UnverifiedCredentials, ValidUser},
-    storage::{
-        Digest, FilesystemStorage, ImageLocation, ManifestReference, Reference, RegistryStorage,
-    },
+    storage::{FilesystemStorage, ImageLocation, ManifestReference, RegistryStorage},
     types::{ImageManifest, OciError, OciErrors},
 };
 use axum::{
-    body::{Body, HttpBody},
+    body::Body,
     extract::{Path, Query, State},
     http::{
         header::{CONTENT_LENGTH, CONTENT_TYPE, LOCATION, RANGE},
@@ -32,7 +30,7 @@ use axum::{
     },
     response::{IntoResponse, Response},
     routing::{get, head, patch, post, put},
-    Json, Router,
+    Router,
 };
 use futures::stream::StreamExt;
 use hex::FromHex;
@@ -468,8 +466,8 @@ mod tests {
     use super::{storage::Digest, DockerRegistry};
 
     struct Context {
-        tmp: TempDir,
-        password: String,
+        _tmp: TempDir,
+        _password: String,
         registry: Arc<DockerRegistry>,
     }
 
@@ -494,8 +492,8 @@ mod tests {
         (
             Context {
                 registry,
-                tmp,
-                password,
+                _tmp: tmp,
+                _password: password,
             },
             service,
         )
@@ -671,7 +669,7 @@ mod tests {
                     .method("PUT")
                     .header(AUTHORIZATION, ctx.basic_auth())
                     .uri(manifest_by_tag_location)
-                    .body(Body::from(&RAW_MANIFEST[..]))
+                    .body(Body::from(RAW_MANIFEST))
                     .unwrap(),
             )
             .await

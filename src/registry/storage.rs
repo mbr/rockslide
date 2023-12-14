@@ -45,6 +45,7 @@ impl Display for Digest {
 #[derive(Debug, Deserialize)]
 struct LayerManifest {
     #[serde(rename = "camelCase")]
+    #[allow(dead_code)] // TODO
     blob_sum: String,
 }
 
@@ -62,6 +63,7 @@ pub(crate) struct ManifestReference {
 }
 
 impl ManifestReference {
+    #[allow(dead_code)] // TODO
     pub(crate) fn new(location: ImageLocation, reference: Reference) -> Self {
         Self {
             location,
@@ -79,6 +81,7 @@ impl ManifestReference {
 }
 
 impl ImageLocation {
+    #[allow(dead_code)] // TODO
     pub(crate) fn new(repository: String, image: String) -> Self {
         Self { repository, image }
     }
@@ -128,11 +131,13 @@ impl Serialize for Reference {
 
 impl Reference {
     #[inline(always)]
+    #[allow(dead_code)] // TODO
     pub(crate) fn new_tag<S: ToString>(s: S) -> Self {
         Reference::Tag(s.to_string())
     }
 
     #[inline(always)]
+    #[allow(dead_code)] // TODO
     pub(crate) fn new_digest(d: Digest) -> Self {
         Reference::Digest(d)
     }
@@ -178,11 +183,13 @@ impl IntoResponse for Error {
 
 #[derive(Debug)]
 pub(crate) struct BlobMetadata {
+    #[allow(dead_code)] // TODO
     digest: Digest,
     size: u64,
 }
 
 impl BlobMetadata {
+    #[allow(dead_code)] // TODO
     pub(crate) fn digest(&self) -> Digest {
         self.digest
     }
@@ -244,7 +251,7 @@ impl FilesystemStorage {
 
         for dir in [&uploads, &blobs, &manifests, &tags] {
             if !dir.exists() {
-                fs::create_dir(&dir)?;
+                fs::create_dir(dir)?;
             }
         }
 
@@ -424,7 +431,7 @@ impl RegistryStorage for FilesystemStorage {
         let _manifest: ImageManifest =
             serde_json::from_slice(manifest).map_err(Error::InvalidManifest)?;
 
-        let digest = Digest::from_contents(manifest.as_ref());
+        let digest = Digest::from_contents(manifest);
         let dest = self.manifest_path(digest);
         tokio::fs::write(dest, &manifest).await.map_err(Error::Io)?;
 
