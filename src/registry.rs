@@ -19,8 +19,7 @@ use std::{
 
 use self::{
     auth::{AuthProvider, UnverifiedCredentials, ValidUser},
-    hooks::RegistryHooks,
-    storage::{FilesystemStorage, ImageLocation, ManifestReference, RegistryStorage},
+    storage::{FilesystemStorage, ImageLocation, RegistryStorage},
     types::{ImageManifest, OciError, OciErrors},
 };
 use axum::{
@@ -41,6 +40,11 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
+
+pub(crate) use {
+    hooks::RegistryHooks,
+    storage::{ManifestReference, Reference},
+};
 
 #[derive(Debug)]
 enum AppError {
@@ -93,12 +97,15 @@ pub(crate) struct DockerRegistry {
 }
 
 impl DockerRegistry {
-    pub(crate) fn new<P: AsRef<std::path::Path>>(storage_path: P) -> Arc<Self> {
+    pub(crate) fn new<P: AsRef<std::path::Path>, T: RegistryHooks + 'static>(
+        storage_path: P,
+        hooks: T,
+    ) -> Arc<Self> {
         Arc::new(DockerRegistry {
             realm: "TODO REGISTRY".to_string(),
             auth_provider: Box::new(()),
             storage: Box::new(FilesystemStorage::new(storage_path).expect("inaccessible storage")),
-            hooks: Box::new(()),
+            hooks: Box::new(hooks),
         })
     }
 
