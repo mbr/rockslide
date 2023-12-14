@@ -6,6 +6,7 @@
 //! * Manifest: https://github.com/opencontainers/image-spec/blob/main/manifest.md
 
 mod auth;
+pub(crate) mod hooks;
 mod storage;
 mod types;
 mod www_authenticate;
@@ -18,6 +19,7 @@ use std::{
 
 use self::{
     auth::{AuthProvider, UnverifiedCredentials, ValidUser},
+    hooks::RegistryHooks,
     storage::{FilesystemStorage, ImageLocation, ManifestReference, RegistryStorage},
     types::{ImageManifest, OciError, OciErrors},
 };
@@ -87,6 +89,7 @@ pub(crate) struct DockerRegistry {
     realm: String,
     auth_provider: Box<dyn AuthProvider>,
     storage: Box<dyn RegistryStorage>,
+    hooks: Box<dyn RegistryHooks>,
 }
 
 impl DockerRegistry {
@@ -95,6 +98,7 @@ impl DockerRegistry {
             realm: "TODO REGISTRY".to_string(),
             auth_provider: Box::new(()),
             storage: Box::new(FilesystemStorage::new(storage_path).expect("inaccessible storage")),
+            hooks: Box::new(()),
         })
     }
 
@@ -405,6 +409,9 @@ async fn manifest_put(
         .storage
         .put_manifest(&manifest_reference, image_manifest_json.as_bytes())
         .await?;
+
+    // Completed upload, call hook:
+    registry.hooks.on_manifest_uploaded(&manifest_reference);
 
     // TODO: Return manifest URL.
     Ok(Response::builder()
