@@ -494,7 +494,7 @@ mod tests {
     fn mk_test_app() -> (Context, RouterIntoService<Body>) {
         let tmp = TempDir::new("rockslide-test").expect("could not create temporary directory");
 
-        let registry = DockerRegistry::new(tmp.as_ref());
+        let registry = DockerRegistry::new(tmp.as_ref(), ());
         let router = registry
             .clone()
             .make_router()
