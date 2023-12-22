@@ -32,6 +32,20 @@ impl Podman {
         }
     }
 
+    pub(crate) fn rm(&self, container: &str, force: bool) -> Result<Output, CommandError> {
+        let mut cmd = self.mk_podman_command();
+
+        cmd.arg("rm");
+
+        if force {
+            cmd.arg("--force");
+        }
+
+        cmd.arg(container);
+
+        checked_output(cmd)
+    }
+
     fn mk_podman_command(&self) -> Command {
         Command::new(&self.podman_path)
     }

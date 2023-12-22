@@ -29,11 +29,14 @@ impl RegistryHooks for PodmanHook {
             let location = manifest_reference.location();
             let name = format!("rockslide-{}-{}", location.repository(), location.image());
 
-            info!(%name, "starting container");
+            info!(%name, "removing (potentially nonexistant) container");
+            if let Err(err) = self.podman.rm(&name, true) {
+                error!(%err, "failed to remove container");
+                return;
+            }
 
-            // TODO: Remove old image.
             // TODO: -p 127.0.0.1:5555:8000
-            // TODO: Determine automatically.
+            // TODO: Determine URL automatically.
             let local_registry_url = "127.0.0.1:3000";
             let image_url = format!(
                 "{}/{}/{}:{}",
@@ -43,7 +46,8 @@ impl RegistryHooks for PodmanHook {
                 production_tag
             );
 
-            match self
+            info!(%name, "starting container");
+            if let Err(err) = self
                 .podman
                 .run(&image_url)
                 .rm()
@@ -52,14 +56,9 @@ impl RegistryHooks for PodmanHook {
                 .tls_verify(false)
                 .execute()
             {
-                Ok(_) => {
-                    // All good.
-                }
-                Err(err) => {
-                    error!(%err, "failed to launch container")
-                }
+                error!(%err, "failed to launch container")
             }
-        } else {
+
             info!(?manifest_reference, "new production image uploaded");
         }
     }
