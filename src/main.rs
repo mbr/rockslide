@@ -35,7 +35,7 @@ impl RegistryHooks for PodmanHook {
                 return;
             }
 
-            // TODO: -p 127.0.0.1:5555:8000
+            // TODO: -p 127.0.0.1::8000
             // TODO: Determine URL automatically.
             let local_registry_url = "127.0.0.1:3000";
             let image_url = format!(
