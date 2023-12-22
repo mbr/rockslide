@@ -344,7 +344,7 @@ async fn upload_add_chunk(
 ) -> Result<UploadState, AppError> {
     // Check if we have a range - if so, its an unsupported feature, namely monolit uploads.
     if request.headers().contains_key(RANGE) {
-        return Err(anyhow::anyhow!("unsupport feature: chunked uploads").into());
+        return Err(anyhow::anyhow!("unsupported feature: chunked uploads").into());
     }
 
     let mut writer = registry.storage.get_upload_writer(0, upload).await?;
