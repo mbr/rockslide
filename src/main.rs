@@ -8,6 +8,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::Path,
     str::FromStr,
+    sync::Arc,
 };
 
 use axum::Router;
@@ -15,7 +16,7 @@ use podman::Podman;
 use registry::{
     storage::ImageLocation, DockerRegistry, ManifestReference, Reference, RegistryHooks,
 };
-use reverse_proxy::ReverseProxy;
+use reverse_proxy::{PublishedContainer, ReverseProxy};
 use serde::{Deserialize, Deserializer};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
@@ -35,12 +36,16 @@ macro_rules! try_quiet {
 
 struct PodmanHook {
     podman: Podman,
+    reverse_proxy: Arc<ReverseProxy>,
 }
 
 impl PodmanHook {
-    fn new<P: AsRef<Path>>(podman_path: P) -> Self {
+    fn new<P: AsRef<Path>>(podman_path: P, reverse_proxy: Arc<ReverseProxy>) -> Self {
         let podman = Podman::new(podman_path);
-        Self { podman }
+        Self {
+            podman,
+            reverse_proxy,
+        }
     }
 
     fn fetch_running_containers(&self) -> anyhow::Result<Vec<ContainerJson>> {
@@ -99,17 +104,11 @@ impl ContainerJson {
         let image_location = self.image_location()?;
         let port_mapping = self.active_published_port()?;
 
-        Some(PublishedContainer {
-            host_addr: port_mapping.get_host_listening_addr()?,
+        Some(PublishedContainer::new(
+            port_mapping.get_host_listening_addr()?,
             image_location,
-        })
+        ))
     }
-}
-
-#[derive(Debug)]
-struct PublishedContainer {
-    host_addr: SocketAddr,
-    image_location: ImageLocation,
 }
 
 fn nullable_array<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>

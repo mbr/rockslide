@@ -49,7 +49,7 @@ struct LayerManifest {
     blob_sum: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub(crate) struct ImageLocation {
     repository: String,
     image: String,
