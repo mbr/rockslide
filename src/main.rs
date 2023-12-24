@@ -54,6 +54,8 @@ impl RegistryHooks for PodmanHook {
                 .rmi()
                 .name(name)
                 .tls_verify(false)
+                .publish("127.0.0.1::8000")
+                .env("PORT", "8000")
                 .execute()
             {
                 error!(%err, "failed to launch container")

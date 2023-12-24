@@ -29,6 +29,8 @@ impl Podman {
             name: None,
             rmi: false,
             tls_verify: true,
+            env: Vec::new(),
+            publish: Vec::new(),
         }
     }
 
@@ -53,35 +55,52 @@ impl Podman {
 
 pub(crate) struct StartCommand<'a> {
     podman: &'a Podman,
+    env: Vec<(String, String)>,
     image_url: String,
     name: Option<String>,
     rm: bool,
     rmi: bool,
     tls_verify: bool,
+    publish: Vec<String>,
 }
 
 impl<'a> StartCommand<'a> {
-    #[inline]
-    pub fn name(&mut self, name: String) -> &mut Self {
-        self.name = Some(name);
+    pub fn env<S1: Into<String>, S2: Into<String>>(&mut self, var: S1, value: S2) -> &mut Self {
+        self.env.push((var.into(), value.into()));
         self
     }
 
+    #[inline]
+    pub fn name<S: Into<String>>(&mut self, name: S) -> &mut Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    #[inline]
+    pub fn publish<S: Into<String>>(&mut self, publish: S) -> &mut Self {
+        self.publish.push(publish.into());
+        self
+    }
+
+    #[inline]
     pub(crate) fn rm(&mut self) -> &mut Self {
         self.rm = true;
         self
     }
 
+    #[inline]
     pub(crate) fn rmi(&mut self) -> &mut Self {
         self.rmi = true;
         self
     }
 
+    #[inline]
     pub(crate) fn tls_verify(&mut self, tls_verify: bool) -> &mut Self {
         self.tls_verify = tls_verify;
         self
     }
 
+    #[inline]
     pub(crate) fn execute(&self) -> Result<Output, CommandError> {
         let mut cmd = self.podman.mk_podman_command();
 
