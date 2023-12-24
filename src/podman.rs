@@ -21,6 +21,7 @@ impl Podman {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn inspect(&self, container: &str) -> Result<serde_json::Value, CommandError> {
         let mut cmd = self.mk_podman_command();
         cmd.arg("inspect");
@@ -44,7 +45,7 @@ impl Podman {
 
     pub(crate) fn run(&self, image_url: &str) -> StartCommand {
         StartCommand {
-            podman: &self,
+            podman: self,
             image_url: image_url.to_owned(),
             rm: false,
             name: None,

@@ -15,7 +15,7 @@ use registry::{
 };
 use serde::{Deserialize, Deserializer};
 use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 macro_rules! try_quiet {
@@ -44,7 +44,7 @@ impl PodmanHook {
         debug!("refreshing running containers");
 
         let value = self.podman.ps(false)?;
-        let mut rv: Vec<ContainerJson> = serde_json::from_value(value)?;
+        let rv: Vec<ContainerJson> = serde_json::from_value(value)?;
 
         debug!(?rv, "fetched containers");
 
@@ -78,8 +78,7 @@ impl ContainerJson {
         const PREFIX: &str = "rockslide-";
 
         for name in &self.names {
-            if name.starts_with(PREFIX) {
-                let subname = &name[PREFIX.len()..];
+            if let Some(subname) = name.strip_prefix(PREFIX) {
                 if let Some((left, right)) = subname.split_once('-') {
                     return Some(ImageLocation::new(left.to_owned(), right.to_owned()));
                 }
@@ -99,7 +98,7 @@ impl ContainerJson {
 
         Some(PublishedContainer {
             host_addr: port_mapping.get_host_listening_addr()?,
-            image_location: image_location,
+            image_location,
         })
     }
 }
@@ -121,7 +120,7 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-
+#[allow(dead_code)]
 struct PortMapping {
     host_ip: String,
     container_port: u16,
