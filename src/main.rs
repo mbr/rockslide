@@ -1,13 +1,34 @@
 mod podman;
 mod registry;
 
-use std::{borrow::Cow, env, path::Path};
+use std::{
+    borrow::Cow,
+    env,
+    net::{Ipv4Addr, SocketAddr},
+    path::Path,
+    str::FromStr,
+};
 
 use podman::Podman;
-use registry::{DockerRegistry, ManifestReference, Reference, RegistryHooks};
+use registry::{
+    storage::ImageLocation, DockerRegistry, ManifestReference, Reference, RegistryHooks,
+};
+use serde::{Deserialize, Deserializer};
 use tower_http::trace::TraceLayer;
-use tracing::{error, info};
+use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+macro_rules! try_quiet {
+    ($ex:expr, $msg:expr) => {
+        match $ex {
+            Ok(v) => v,
+            Err(err) => {
+                error!(%err, $msg);
+                return;
+            }
+        }
+    };
+}
 
 struct PodmanHook {
     podman: Podman,
@@ -17,6 +38,103 @@ impl PodmanHook {
     fn new<P: AsRef<Path>>(podman_path: P) -> Self {
         let podman = Podman::new(podman_path);
         Self { podman }
+    }
+
+    fn fetch_running_containers(&self) -> anyhow::Result<Vec<ContainerJson>> {
+        debug!("refreshing running containers");
+
+        let value = self.podman.ps(false)?;
+        let mut rv: Vec<ContainerJson> = serde_json::from_value(value)?;
+
+        debug!(?rv, "fetched containers");
+
+        Ok(rv)
+    }
+
+    fn updated_published_set(&self) {
+        let running: Vec<_> = try_quiet!(
+            self.fetch_running_containers(),
+            "could not fetch running containers"
+        )
+        .iter()
+        .filter_map(ContainerJson::published_container)
+        .collect();
+
+        info!(?running, "updating running container set");
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ContainerJson {
+    id: String,
+    names: Vec<String>,
+    #[serde(deserialize_with = "nullable_array")]
+    ports: Vec<PortMapping>,
+}
+
+impl ContainerJson {
+    fn image_location(&self) -> Option<ImageLocation> {
+        const PREFIX: &str = "rockslide-";
+
+        for name in &self.names {
+            if name.starts_with(PREFIX) {
+                let subname = &name[PREFIX.len()..];
+                if let Some((left, right)) = subname.split_once('-') {
+                    return Some(ImageLocation::new(left.to_owned(), right.to_owned()));
+                }
+            }
+        }
+
+        None
+    }
+
+    fn active_published_port(&self) -> Option<&PortMapping> {
+        self.ports.get(0)
+    }
+
+    fn published_container(&self) -> Option<PublishedContainer> {
+        let image_location = self.image_location()?;
+        let port_mapping = self.active_published_port()?;
+
+        Some(PublishedContainer {
+            host_addr: port_mapping.get_host_listening_addr()?,
+            image_location: image_location,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct PublishedContainer {
+    host_addr: SocketAddr,
+    image_location: ImageLocation,
+}
+
+fn nullable_array<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let opt: Option<Vec<T>> = Deserialize::deserialize(deserializer)?;
+
+    Ok(opt.unwrap_or_default())
+}
+
+#[derive(Debug, Deserialize)]
+
+struct PortMapping {
+    host_ip: String,
+    container_port: u16,
+    host_port: u16,
+    range: u16,
+    protocol: String,
+}
+
+impl PortMapping {
+    fn get_host_listening_addr(&self) -> Option<SocketAddr> {
+        let ip = Ipv4Addr::from_str(&self.host_ip).ok()?;
+
+        Some((ip, self.host_port).into())
     }
 }
 
@@ -30,12 +148,8 @@ impl RegistryHooks for PodmanHook {
             let name = format!("rockslide-{}-{}", location.repository(), location.image());
 
             info!(%name, "removing (potentially nonexistant) container");
-            if let Err(err) = self.podman.rm(&name, true) {
-                error!(%err, "failed to remove container");
-                return;
-            }
+            try_quiet!(self.podman.rm(&name, true), "failed to remove container");
 
-            // TODO: -p 127.0.0.1::8000
             // TODO: Determine URL automatically.
             let local_registry_url = "127.0.0.1:3000";
             let image_url = format!(
@@ -47,19 +161,19 @@ impl RegistryHooks for PodmanHook {
             );
 
             info!(%name, "starting container");
-            if let Err(err) = self
-                .podman
-                .run(&image_url)
-                .rm()
-                .rmi()
-                .name(name)
-                .tls_verify(false)
-                .publish("127.0.0.1::8000")
-                .env("PORT", "8000")
-                .execute()
-            {
-                error!(%err, "failed to launch container")
-            }
+
+            try_quiet!(
+                self.podman
+                    .run(&image_url)
+                    .rm()
+                    .rmi()
+                    .name(name)
+                    .tls_verify(false)
+                    .publish("127.0.0.1::8000")
+                    .env("PORT", "8000")
+                    .execute(),
+                "failed to launch container"
+            );
 
             info!(?manifest_reference, "new production image uploaded");
         }
@@ -83,6 +197,8 @@ async fn main() {
         .map(Cow::Owned)
         .unwrap_or(Cow::Borrowed("podman"));
     let hooks = PodmanHook::new(podman_path.as_ref());
+
+    hooks.updated_published_set();
     let registry = DockerRegistry::new("./rockslide-storage", hooks);
 
     let app = registry.make_router().layer(TraceLayer::new_for_http());

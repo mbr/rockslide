@@ -7,7 +7,7 @@
 
 mod auth;
 pub(crate) mod hooks;
-mod storage;
+pub(crate) mod storage;
 mod types;
 mod www_authenticate;
 

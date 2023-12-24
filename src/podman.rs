@@ -5,7 +5,7 @@ use std::{
     process::{Command, Output},
 };
 
-use tracing::debug;
+use tracing::{debug, trace};
 
 #[derive(Debug)]
 pub(crate) struct Podman {
@@ -19,6 +19,27 @@ impl Podman {
         Self {
             podman_path: podman_path.as_ref().into(),
         }
+    }
+
+    pub(crate) fn inspect(&self, container: &str) -> Result<serde_json::Value, CommandError> {
+        let mut cmd = self.mk_podman_command();
+        cmd.arg("inspect");
+        cmd.arg(container);
+        cmd.args(["--format", "json"]);
+        fetch_json(cmd)
+    }
+
+    pub(crate) fn ps(&self, all: bool) -> Result<serde_json::Value, CommandError> {
+        let mut cmd = self.mk_podman_command();
+        cmd.arg("ps");
+
+        if all {
+            cmd.arg("--all");
+        }
+
+        cmd.args(["--format", "json"]);
+
+        fetch_json(cmd)
     }
 
     pub(crate) fn run(&self, image_url: &str) -> StartCommand {
@@ -120,6 +141,14 @@ impl<'a> StartCommand<'a> {
             cmd.args(["--name", name.as_str()]);
         }
 
+        for publish in &self.publish {
+            cmd.args(["-p", publish.as_str()]);
+        }
+
+        for (key, value) in &self.env {
+            cmd.args(["-e", &format!("{}={}", key, value)]);
+        }
+
         cmd.arg(&self.image_url);
 
         checked_output(cmd)
@@ -165,6 +194,8 @@ impl Display for CommandError {
     }
 }
 
+impl std::error::Error for CommandError {}
+
 fn checked_output(mut cmd: Command) -> Result<Output, CommandError> {
     debug!(?cmd, "running command");
     let output = cmd.output()?;
@@ -178,4 +209,15 @@ fn checked_output(mut cmd: Command) -> Result<Output, CommandError> {
     }
 
     Ok(output)
+}
+
+fn fetch_json(cmd: Command) -> Result<serde_json::Value, CommandError> {
+    let output = checked_output(cmd)?;
+
+    trace!(raw = %String::from_utf8_lossy(&output.stdout), "parsing JSON");
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+    Ok(parsed)
 }
