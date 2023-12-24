@@ -418,7 +418,10 @@ async fn manifest_put(
         .await?;
 
     // Completed upload, call hook:
-    registry.hooks.on_manifest_uploaded(&manifest_reference);
+    registry
+        .hooks
+        .on_manifest_uploaded(&manifest_reference)
+        .await;
 
     // TODO: Return manifest URL.
     Ok(Response::builder()

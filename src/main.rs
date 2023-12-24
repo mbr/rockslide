@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 
-use axum::Router;
+use axum::{async_trait, Router};
 use podman::Podman;
 use registry::{
     storage::ImageLocation, DockerRegistry, ManifestReference, Reference, RegistryHooks,
@@ -59,7 +59,7 @@ impl PodmanHook {
         Ok(rv)
     }
 
-    fn updated_published_set(&self) {
+    async fn updated_published_set(&self) {
         let running: Vec<_> = try_quiet!(
             self.fetch_running_containers(),
             "could not fetch running containers"
@@ -69,11 +69,15 @@ impl PodmanHook {
         .collect();
 
         info!(?running, "updating running container set");
+        self.reverse_proxy
+            .update_containers(running.into_iter())
+            .await;
     }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+#[allow(dead_code)]
 struct ContainerJson {
     id: String,
     names: Vec<String>,
@@ -139,8 +143,9 @@ impl PortMapping {
     }
 }
 
+#[async_trait]
 impl RegistryHooks for PodmanHook {
-    fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
+    async fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
         // TODO: Make configurable?
         let production_tag = "prod";
 
@@ -177,6 +182,8 @@ impl RegistryHooks for PodmanHook {
             );
 
             info!(?manifest_reference, "new production image uploaded");
+
+            self.updated_published_set().await;
         }
     }
 }
@@ -197,11 +204,12 @@ async fn main() {
     let podman_path = env::var("ROCKSLIDE_PODMAN_PATH")
         .map(Cow::Owned)
         .unwrap_or(Cow::Borrowed("podman"));
-    let hooks = PodmanHook::new(podman_path.as_ref());
-
-    hooks.updated_published_set();
-    let registry = DockerRegistry::new("./rockslide-storage", hooks);
     let reverse_proxy = ReverseProxy::new();
+
+    let hooks = PodmanHook::new(podman_path.as_ref(), reverse_proxy.clone());
+    hooks.updated_published_set().await;
+
+    let registry = DockerRegistry::new("./rockslide-storage", hooks);
 
     let app = Router::new()
         .merge(registry.make_router())

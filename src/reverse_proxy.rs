@@ -2,7 +2,7 @@ use std::{collections::HashMap, mem, net::SocketAddr, sync::Arc};
 
 use axum::{
     body::Body,
-    extract::{Path, Request, State},
+    extract::{Request, State},
     response::Response,
     routing::any,
     Router,
@@ -48,7 +48,7 @@ impl ReverseProxy {
     }
 
     pub(crate) async fn update_containers(
-        self,
+        &self,
         containers: impl Iterator<Item = PublishedContainer>,
     ) {
         let mut new_mapping = containers
