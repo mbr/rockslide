@@ -1,5 +1,6 @@
 mod podman;
 mod registry;
+mod reverse_proxy;
 
 use std::{
     borrow::Cow,
@@ -9,10 +10,12 @@ use std::{
     str::FromStr,
 };
 
+use axum::Router;
 use podman::Podman;
 use registry::{
     storage::ImageLocation, DockerRegistry, ManifestReference, Reference, RegistryHooks,
 };
+use reverse_proxy::ReverseProxy;
 use serde::{Deserialize, Deserializer};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
@@ -199,8 +202,12 @@ async fn main() {
 
     hooks.updated_published_set();
     let registry = DockerRegistry::new("./rockslide-storage", hooks);
+    let reverse_proxy = ReverseProxy::new();
 
-    let app = registry.make_router().layer(TraceLayer::new_for_http());
+    let app = Router::new()
+        .merge(registry.make_router())
+        .merge(reverse_proxy.make_router())
+        .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
