@@ -30,3 +30,8 @@ uuid = { version = "1.6.1", features = [ "v4", "serde" ] }
 http-body-util = "0.1.0"
 tempdir = "0.3.7"
 tower = "0.4.13"
+
+[profile.release]
+opt-level = "s"
+strip = "symbols"
+lto = "fat"
