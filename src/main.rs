@@ -235,7 +235,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(reverse_proxy.make_router())
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let listener = tokio::net::TcpListener::bind(cfg.reverse_proxy.http_bind)
         .await
         .context("failed to bind listener")?;
     axum::serve(listener, app)

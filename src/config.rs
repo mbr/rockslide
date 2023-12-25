@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::SocketAddr, path::PathBuf};
 
 use sec::Secret;
 use serde::Deserialize;
@@ -11,6 +11,8 @@ pub(crate) struct Config {
     pub registry: RegistryConfig,
     #[serde(default)]
     pub containers: ContainerConfig,
+    #[serde(default)]
+    pub reverse_proxy: ReverseProxyConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +69,10 @@ impl Default for RegistryConfig {
     }
 }
 
+fn default_storage_path() -> PathBuf {
+    "./rockslide-storage".into()
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct ContainerConfig {
     #[serde(default = "default_podman_path")]
@@ -85,6 +91,20 @@ fn default_podman_path() -> PathBuf {
     "podman".into()
 }
 
-fn default_storage_path() -> PathBuf {
-    "./rockslide-storage".into()
+#[derive(Debug, Deserialize)]
+pub(crate) struct ReverseProxyConfig {
+    #[serde(default = "default_http_bind")]
+    pub http_bind: SocketAddr,
+}
+
+impl Default for ReverseProxyConfig {
+    fn default() -> Self {
+        Self {
+            http_bind: default_http_bind(),
+        }
+    }
+}
+
+fn default_http_bind() -> SocketAddr {
+    ([127, 0, 0, 1], 3000).into()
 }
