@@ -21,17 +21,27 @@ pub(crate) struct RockslideConfig {
     pub log: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default)]
 pub(crate) enum MasterKey {
     #[default]
     Locked,
     Key(Secret<String>),
 }
 
+impl<'de> Deserialize<'de> for MasterKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(Option::<String>::deserialize(deserializer)?
+            .map(Secret::new)
+            .map(MasterKey::Key)
+            .unwrap_or(MasterKey::Locked))
+    }
+}
+
 fn default_log() -> String {
-    // axum logs rejections from built-in extractors with the `axum::rejection` target, at `TRACE`
-    // level. `axum::rejection=trace` enables showing those events
-    "rockslide=debug,tower_http=debug,axum::rejection=trace".to_owned()
+    "rockslide=info".to_owned()
 }
 
 impl Default for RockslideConfig {
