@@ -1,17 +1,19 @@
+mod config;
 mod podman;
 mod registry;
 mod reverse_proxy;
 
 use std::{
-    borrow::Cow,
-    env,
+    env, fs,
     net::{Ipv4Addr, SocketAddr},
     path::Path,
     str::FromStr,
     sync::Arc,
 };
 
+use anyhow::Context;
 use axum::{async_trait, Router};
+use config::Config;
 use podman::Podman;
 use registry::{
     storage::ImageLocation, DockerRegistry, ManifestReference, Reference, RegistryHooks,
@@ -188,34 +190,57 @@ impl RegistryHooks for PodmanHook {
     }
 }
 
+fn load_config() -> anyhow::Result<Config> {
+    match env::args().len() {
+        0 | 1 => Ok(Default::default()),
+        2 => {
+            let arg = env::args().nth(1).expect("should have arg 1");
+            let contents = fs::read_to_string(&arg)
+                .context("could not read configuration file")
+                .context(arg)?;
+            let cfg = toml::from_str(&contents).context("failed to parse configuration")?;
+
+            Ok(cfg)
+        }
+        _ => Err(anyhow::anyhow!(
+            "expected at most one command arg, pointing to a config file"
+        )),
+    }
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
+    // Parse configuration, if available, otherwise use a default.
+    let cfg = load_config().context("could not load configuration")?;
+
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                // axum logs rejections from built-in extractors with the `axum::rejection`
-                // target, at `TRACE` level. `axum::rejection=trace` enables showing those events
-                "rockslide=debug,tower_http=debug,axum::rejection=trace".into()
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| (&cfg.rockslide.log).into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let podman_path = env::var("ROCKSLIDE_PODMAN_PATH")
-        .map(Cow::Owned)
-        .unwrap_or(Cow::Borrowed("podman"));
+    debug!(?cfg, "loaded configuration");
+
     let reverse_proxy = ReverseProxy::new();
 
-    let hooks = PodmanHook::new(podman_path.as_ref(), reverse_proxy.clone());
+    let hooks = PodmanHook::new(&cfg.containers.podman_path, reverse_proxy.clone());
     hooks.updated_published_set().await;
 
-    let registry = DockerRegistry::new("./rockslide-storage", hooks);
+    let registry = DockerRegistry::new(&cfg.registry.storage_path, hooks);
 
     let app = Router::new()
         .merge(registry.make_router())
         .merge(reverse_proxy.make_router())
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .context("failed to bind listener")?;
+    axum::serve(listener, app)
+        .await
+        .context("http server exited with error")?;
+
+    Ok(())
 }
