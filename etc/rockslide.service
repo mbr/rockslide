@@ -1,0 +1,12 @@
+[Unit]
+Description=Rockslide server
+
+[Service]
+ExecStart=/usr/local/bin/rockslide
+RestartSec=2
+Restart=always
+User=rockslide
+Group=rockslide
+
+[Install]
+WantedBy=multi-user.target
