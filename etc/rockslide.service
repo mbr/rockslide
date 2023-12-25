@@ -2,7 +2,7 @@
 Description=Rockslide server
 
 [Service]
-ExecStart=/usr/local/bin/rockslide
+ExecStart=/usr/local/bin/rockslide /etc/rockslide.toml
 RestartSec=2
 Restart=always
 User=rockslide
