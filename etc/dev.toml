@@ -1,4 +1,4 @@
 # Development configuration for rockslide.
 [rockslide]
-log = "rockslide=debug,tower_http=debug,axum::rejection=trace"
+log = "rockslide=trace,tower_http=debug,axum::rejection=trace"
 master_key = "devpw"

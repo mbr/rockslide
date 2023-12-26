@@ -215,6 +215,12 @@ fn checked_output(mut cmd: Command) -> Result<Output, CommandError> {
         });
     }
 
+    trace!(
+        stdout = %std::str::from_utf8(&output.stdout).unwrap_or("(invalid utf8)"),
+        stderr = %std::str::from_utf8(&output.stderr).unwrap_or("(invalid utf8)"),
+        "command finished"
+    );
+
     Ok(output)
 }
 
