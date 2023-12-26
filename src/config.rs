@@ -42,6 +42,13 @@ impl MasterKey {
     pub(crate) fn new_key(key: String) -> MasterKey {
         MasterKey::Key(Secret::new(key))
     }
+
+    pub(crate) fn as_secret_string(&self) -> Secret<String> {
+        match self {
+            MasterKey::Locked => Secret::new(String::new()),
+            MasterKey::Key(key) => key.clone(),
+        }
+    }
 }
 
 #[async_trait]

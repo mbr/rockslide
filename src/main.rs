@@ -19,6 +19,7 @@ use registry::{
     storage::ImageLocation, ContainerRegistry, ManifestReference, Reference, RegistryHooks,
 };
 use reverse_proxy::{PublishedContainer, ReverseProxy};
+use sec::Secret;
 use serde::{Deserialize, Deserializer};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
@@ -40,6 +41,7 @@ struct PodmanHook {
     podman: Podman,
     reverse_proxy: Arc<ReverseProxy>,
     local_addr: SocketAddr,
+    registry_credentials: (String, Secret<String>),
 }
 
 impl PodmanHook {
@@ -47,12 +49,14 @@ impl PodmanHook {
         podman_path: P,
         reverse_proxy: Arc<ReverseProxy>,
         local_addr: SocketAddr,
+        registry_credentials: (String, Secret<String>),
     ) -> Self {
         let podman = Podman::new(podman_path);
         Self {
             podman,
             reverse_proxy,
             local_addr,
+            registry_credentials,
         }
     }
 
@@ -175,6 +179,19 @@ impl RegistryHooks for PodmanHook {
                 production_tag
             );
 
+            info!(%name, "loggging in");
+            try_quiet!(
+                self.podman
+                    .login(
+                        &self.registry_credentials.0,
+                        self.registry_credentials.1.as_str(),
+                        self.local_addr.to_string().as_ref(),
+                        false
+                    )
+                    .await,
+                "failed to login to local registry"
+            );
+
             // We always pull the container to ensure we have the latest version.
             info!(%name, "pulling container");
             try_quiet!(
@@ -242,10 +259,15 @@ async fn main() -> anyhow::Result<()> {
 
     let reverse_proxy = ReverseProxy::new();
 
+    let credentials = (
+        "rockslide-podman".to_owned(),
+        cfg.rockslide.master_key.as_secret_string(),
+    );
     let hooks = PodmanHook::new(
         &cfg.containers.podman_path,
         reverse_proxy.clone(),
         local_addr,
+        credentials,
     );
     hooks.updated_published_set().await;
 

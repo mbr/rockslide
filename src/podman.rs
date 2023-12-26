@@ -1,10 +1,11 @@
 use std::{
     fmt::Display,
-    io,
+    io::{self, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::Output,
+    process::{Output, Stdio},
 };
 
+use sec::Secret;
 use tokio::process::Command;
 use tracing::{debug, trace};
 
@@ -31,6 +32,36 @@ impl Podman {
         fetch_json(cmd).await
     }
 
+    pub(crate) async fn login(
+        &self,
+        username: &str,
+        password: Secret<&str>,
+        registry: &str,
+        tls_verify: bool,
+    ) -> Result<(), CommandError> {
+        let mut cmd = self.mk_podman_command();
+        cmd.arg("login");
+        cmd.args(["--username", username]);
+        cmd.arg("--password-stdin");
+
+        if !tls_verify {
+            cmd.arg("--tls-verify=false");
+        }
+
+        cmd.arg(registry);
+
+        let mut pw_file = memfile::MemFile::create("rockslide podman pw", Default::default())?;
+
+        pw_file.write(password.reveal().as_bytes())?;
+        pw_file.seek(SeekFrom::Start(0))?;
+
+        cmd.stdin(Stdio::from(pw_file.into_fd()));
+
+        checked_output(cmd).await?;
+
+        Ok(())
+    }
+
     pub(crate) async fn ps(&self, all: bool) -> Result<serde_json::Value, CommandError> {
         let mut cmd = self.mk_podman_command();
         cmd.arg("ps");
@@ -45,6 +76,7 @@ impl Podman {
     }
 
     pub(crate) async fn pull(&self, image: &str) -> Result<(), CommandError> {
+        // TODO: Make `--tls-verify` configurable.
         let mut cmd = self.mk_podman_command();
         cmd.arg("pull");
         cmd.arg(image);
@@ -86,7 +118,7 @@ impl Podman {
 
         // Since we are running as a system service, we usually do not have the luxury of a
         // user-level systemd available, thus use `cgroupfs` as the cgroup manager.
-        cmd.arg("--cgroup-manager=cgroupfs");
+        cmd.arg("--cgroup-manager=cgroupfs").kill_on_drop(true);
 
         cmd
     }

@@ -659,6 +659,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f665ee40bc4a3c5590afb1e9677db74a508659dfd71e126420da8274909a0167"
 
 [[package]]
+name = "memfile"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f64636fdb65a5f0740f920c4281f3dbb76a71e25e25914b6d27000739897d40e"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -934,6 +943,7 @@ dependencies = [
  "hex",
  "http-body-util",
  "itertools",
+ "memfile",
  "nom",
  "reqwest",
  "sec",
