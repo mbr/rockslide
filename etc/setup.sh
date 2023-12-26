@@ -22,3 +22,4 @@ chown rockslide:rockslide /var/lib/rockslide/registry
 
 systemctl daemon-reload
 systemctl restart rockslide
+systemctl enable rockslide
