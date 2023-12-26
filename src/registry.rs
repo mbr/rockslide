@@ -90,14 +90,14 @@ impl IntoResponse for AppError {
     }
 }
 
-pub(crate) struct DockerRegistry {
+pub(crate) struct ContainerRegistry {
     realm: String,
     auth_provider: Box<dyn AuthProvider>,
     storage: Box<dyn RegistryStorage>,
     hooks: Box<dyn RegistryHooks>,
 }
 
-impl DockerRegistry {
+impl ContainerRegistry {
     pub(crate) fn new<
         P: AsRef<std::path::Path>,
         T: RegistryHooks + 'static,
@@ -107,7 +107,7 @@ impl DockerRegistry {
         hooks: T,
         auth_provider: A,
     ) -> Arc<Self> {
-        Arc::new(DockerRegistry {
+        Arc::new(ContainerRegistry {
             realm: "ContainerRegistry".to_string(),
             auth_provider: Box::new(auth_provider),
             storage: Box::new(FilesystemStorage::new(storage_path).expect("inaccessible storage")),
@@ -115,7 +115,7 @@ impl DockerRegistry {
         })
     }
 
-    pub(crate) fn make_router(self: Arc<DockerRegistry>) -> Router {
+    pub(crate) fn make_router(self: Arc<ContainerRegistry>) -> Router {
         Router::new()
             .route("/v2/", get(index_v2))
             .route("/v2/:repository/:image/blobs/:digest", head(blob_check))
@@ -142,7 +142,7 @@ impl DockerRegistry {
 }
 
 async fn index_v2(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     credentials: Option<UnverifiedCredentials>,
 ) -> Response<Body> {
     let realm = &registry.realm;
@@ -166,7 +166,7 @@ async fn index_v2(
 }
 
 async fn blob_check(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     Path((_, _, image)): Path<(String, String, ImageDigest)>,
     _auth: ValidUser,
 ) -> Result<Response, AppError> {
@@ -187,7 +187,7 @@ async fn blob_check(
 }
 
 async fn blob_get(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     Path((_, _, image)): Path<(String, String, ImageDigest)>,
     _auth: ValidUser,
 ) -> Result<Response, AppError> {
@@ -209,7 +209,7 @@ async fn blob_get(
 }
 
 async fn upload_new(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     Path(location): Path<ImageLocation>,
     _auth: ValidUser,
 ) -> Result<UploadState, AppError> {
@@ -342,7 +342,7 @@ impl Display for ImageDigest {
 }
 
 async fn upload_add_chunk(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     Path(location): Path<ImageLocation>,
     Path(UploadId { upload }): Path<UploadId>,
     _auth: ValidUser,
@@ -380,7 +380,7 @@ struct DigestQuery {
 }
 
 async fn upload_finalize(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     Path((_, _, upload)): Path<(String, String, Uuid)>,
     Query(DigestQuery { digest }): Query<DigestQuery>,
     _auth: ValidUser,
@@ -413,7 +413,7 @@ async fn upload_finalize(
 }
 
 async fn manifest_put(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     Path(manifest_reference): Path<ManifestReference>,
     _auth: ValidUser,
     image_manifest_json: String,
@@ -443,7 +443,7 @@ async fn manifest_put(
 }
 
 async fn manifest_get(
-    State(registry): State<Arc<DockerRegistry>>,
+    State(registry): State<Arc<ContainerRegistry>>,
     Path(manifest_reference): Path<ManifestReference>,
     _auth: ValidUser,
 ) -> Result<Response<Body>, AppError> {
@@ -490,12 +490,12 @@ mod tests {
         },
     };
 
-    use super::{storage::Digest, DockerRegistry};
+    use super::{storage::Digest, ContainerRegistry};
 
     struct Context {
         _tmp: TempDir,
         password: String,
-        registry: Arc<DockerRegistry>,
+        registry: Arc<ContainerRegistry>,
     }
 
     impl Context {
@@ -518,7 +518,7 @@ mod tests {
         let password = "random-test-password".to_owned();
         let master_key = MasterKey::new_key(password.clone());
 
-        let registry = DockerRegistry::new(tmp.as_ref(), (), master_key);
+        let registry = ContainerRegistry::new(tmp.as_ref(), (), master_key);
         let router = registry
             .clone()
             .make_router()

@@ -16,7 +16,7 @@ use axum::{async_trait, Router};
 use config::Config;
 use podman::Podman;
 use registry::{
-    storage::ImageLocation, DockerRegistry, ManifestReference, Reference, RegistryHooks,
+    storage::ImageLocation, ContainerRegistry, ManifestReference, Reference, RegistryHooks,
 };
 use reverse_proxy::{PublishedContainer, ReverseProxy};
 use serde::{Deserialize, Deserializer};
@@ -228,7 +228,8 @@ async fn main() -> anyhow::Result<()> {
     let hooks = PodmanHook::new(&cfg.containers.podman_path, reverse_proxy.clone());
     hooks.updated_published_set().await;
 
-    let registry = DockerRegistry::new(&cfg.registry.storage_path, hooks, cfg.rockslide.master_key);
+    let registry =
+        ContainerRegistry::new(&cfg.registry.storage_path, hooks, cfg.rockslide.master_key);
 
     let app = Router::new()
         .merge(registry.make_router())

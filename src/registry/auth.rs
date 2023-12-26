@@ -13,7 +13,7 @@ use sec::Secret;
 
 use super::{
     www_authenticate::{self},
-    DockerRegistry,
+    ContainerRegistry,
 };
 
 #[derive(Debug)]
@@ -58,12 +58,12 @@ impl ValidUser {
 }
 
 #[async_trait]
-impl FromRequestParts<Arc<DockerRegistry>> for ValidUser {
+impl FromRequestParts<Arc<ContainerRegistry>> for ValidUser {
     type Rejection = StatusCode;
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &Arc<DockerRegistry>,
+        state: &Arc<ContainerRegistry>,
     ) -> Result<Self, Self::Rejection> {
         let unverified = UnverifiedCredentials::from_request_parts(parts, state).await?;
 
