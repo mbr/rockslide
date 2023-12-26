@@ -19,7 +19,6 @@ use super::{
 #[derive(Debug)]
 pub(crate) struct UnverifiedCredentials {
     pub username: String,
-    #[allow(dead_code)] // TODO
     pub password: Secret<String>,
 }
 
@@ -80,10 +79,9 @@ impl FromRequestParts<Arc<DockerRegistry>> for ValidUser {
 #[async_trait]
 pub(crate) trait AuthProvider: Send + Sync {
     /// Determine whether the supplied credentials are valid.
-
     async fn check_credentials(&self, creds: &UnverifiedCredentials) -> bool;
-    /// Check if the given user has access to the given repo.
 
+    /// Check if the given user has access to the given repo.
     async fn has_access_to(&self, username: &str, namespace: &str, image: &str) -> bool;
 }
 

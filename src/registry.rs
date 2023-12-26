@@ -18,7 +18,7 @@ use std::{
 };
 
 use self::{
-    auth::{AuthProvider, UnverifiedCredentials, ValidUser},
+    auth::ValidUser,
     storage::{FilesystemStorage, ImageLocation, RegistryStorage},
     types::{ImageManifest, OciError, OciErrors},
 };
@@ -42,6 +42,7 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 pub(crate) use {
+    auth::{AuthProvider, UnverifiedCredentials},
     hooks::RegistryHooks,
     storage::{ManifestReference, Reference},
 };

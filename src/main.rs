@@ -1,6 +1,6 @@
 mod config;
 mod podman;
-mod registry;
+pub(crate) mod registry;
 mod reverse_proxy;
 
 use std::{
