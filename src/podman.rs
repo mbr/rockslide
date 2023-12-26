@@ -2,9 +2,10 @@ use std::{
     fmt::Display,
     io,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
 };
 
+use tokio::process::Command;
 use tracing::{debug, trace};
 
 #[derive(Debug)]
@@ -22,15 +23,15 @@ impl Podman {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn inspect(&self, container: &str) -> Result<serde_json::Value, CommandError> {
+    pub(crate) async fn inspect(&self, container: &str) -> Result<serde_json::Value, CommandError> {
         let mut cmd = self.mk_podman_command();
         cmd.arg("inspect");
         cmd.arg(container);
         cmd.args(["--format", "json"]);
-        fetch_json(cmd)
+        fetch_json(cmd).await
     }
 
-    pub(crate) fn ps(&self, all: bool) -> Result<serde_json::Value, CommandError> {
+    pub(crate) async fn ps(&self, all: bool) -> Result<serde_json::Value, CommandError> {
         let mut cmd = self.mk_podman_command();
         cmd.arg("ps");
 
@@ -40,16 +41,16 @@ impl Podman {
 
         cmd.args(["--format", "json"]);
 
-        fetch_json(cmd)
+        fetch_json(cmd).await
     }
 
-    pub(crate) fn pull(&self, image: &str) -> Result<(), CommandError> {
+    pub(crate) async fn pull(&self, image: &str) -> Result<(), CommandError> {
         let mut cmd = self.mk_podman_command();
         cmd.arg("pull");
         cmd.arg(image);
         cmd.arg("--tls-verify=false");
 
-        checked_output(cmd)?;
+        checked_output(cmd).await?;
         Ok(())
     }
 
@@ -66,7 +67,7 @@ impl Podman {
         }
     }
 
-    pub(crate) fn rm(&self, container: &str, force: bool) -> Result<Output, CommandError> {
+    pub(crate) async fn rm(&self, container: &str, force: bool) -> Result<Output, CommandError> {
         let mut cmd = self.mk_podman_command();
 
         cmd.arg("rm");
@@ -77,7 +78,7 @@ impl Podman {
 
         cmd.arg(container);
 
-        checked_output(cmd)
+        checked_output(cmd).await
     }
 
     fn mk_podman_command(&self) -> Command {
@@ -139,7 +140,7 @@ impl<'a> StartCommand<'a> {
     }
 
     #[inline]
-    pub(crate) fn execute(&self) -> Result<Output, CommandError> {
+    pub(crate) async fn execute(&self) -> Result<Output, CommandError> {
         let mut cmd = self.podman.mk_podman_command();
 
         cmd.arg("run");
@@ -172,7 +173,7 @@ impl<'a> StartCommand<'a> {
 
         cmd.arg(&self.image_url);
 
-        checked_output(cmd)
+        checked_output(cmd).await
     }
 }
 
@@ -217,9 +218,9 @@ impl Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
-fn checked_output(mut cmd: Command) -> Result<Output, CommandError> {
+async fn checked_output(mut cmd: Command) -> Result<Output, CommandError> {
     debug!(?cmd, "running command");
-    let output = cmd.output()?;
+    let output = cmd.output().await?;
 
     if !output.status.success() {
         return Err(CommandError {
@@ -238,8 +239,8 @@ fn checked_output(mut cmd: Command) -> Result<Output, CommandError> {
     Ok(output)
 }
 
-fn fetch_json(cmd: Command) -> Result<serde_json::Value, CommandError> {
-    let output = checked_output(cmd)?;
+async fn fetch_json(cmd: Command) -> Result<serde_json::Value, CommandError> {
+    let output = checked_output(cmd).await?;
 
     trace!(raw = %String::from_utf8_lossy(&output.stdout), "parsing JSON");
 

@@ -56,10 +56,10 @@ impl PodmanHook {
         }
     }
 
-    fn fetch_running_containers(&self) -> anyhow::Result<Vec<ContainerJson>> {
+    async fn fetch_running_containers(&self) -> anyhow::Result<Vec<ContainerJson>> {
         debug!("refreshing running containers");
 
-        let value = self.podman.ps(false)?;
+        let value = self.podman.ps(false).await?;
         let rv: Vec<ContainerJson> = serde_json::from_value(value)?;
 
         debug!(?rv, "fetched containers");
@@ -69,7 +69,7 @@ impl PodmanHook {
 
     async fn updated_published_set(&self) {
         let running: Vec<_> = try_quiet!(
-            self.fetch_running_containers(),
+            self.fetch_running_containers().await,
             "could not fetch running containers"
         )
         .iter()
@@ -162,7 +162,10 @@ impl RegistryHooks for PodmanHook {
             let name = format!("rockslide-{}-{}", location.repository(), location.image());
 
             info!(%name, "removing (potentially nonexistant) container");
-            try_quiet!(self.podman.rm(&name, true), "failed to remove container");
+            try_quiet!(
+                self.podman.rm(&name, true).await,
+                "failed to remove container"
+            );
 
             let image_url = format!(
                 "{}/{}/{}:{}",
@@ -174,7 +177,10 @@ impl RegistryHooks for PodmanHook {
 
             // We always pull the container to ensure we have the latest version.
             info!(%name, "pulling container");
-            try_quiet!(self.podman.pull(&image_url), "failed to pull container");
+            try_quiet!(
+                self.podman.pull(&image_url).await,
+                "failed to pull container"
+            );
 
             info!(%name, "starting container");
             try_quiet!(
@@ -186,7 +192,8 @@ impl RegistryHooks for PodmanHook {
                     .tls_verify(false)
                     .publish("127.0.0.1::8000")
                     .env("PORT", "8000")
-                    .execute(),
+                    .execute()
+                    .await,
                 "failed to launch container"
             );
 
