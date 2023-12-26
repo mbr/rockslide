@@ -1,9 +1,16 @@
-use std::{collections::HashMap, mem, net::SocketAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+    mem,
+    net::SocketAddr,
+    sync::Arc,
+};
 
 use axum::{
     body::Body,
     extract::{Request, State},
-    response::Response,
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::any,
     Router,
 };
@@ -20,6 +27,50 @@ pub(crate) struct ReverseProxy {
 pub(crate) struct PublishedContainer {
     host_addr: SocketAddr,
     image_location: ImageLocation,
+}
+
+#[derive(Debug)]
+enum AppError {
+    NoSuchContainer,
+    AssertionFailed(&'static str),
+    NonUtf8Header,
+    Internal(anyhow::Error),
+}
+
+impl Display for AppError {
+    #[inline(always)]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::NoSuchContainer => f.write_str("no such container"),
+            AppError::AssertionFailed(msg) => f.write_str(msg),
+            AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
+            AppError::Internal(err) => Display::fmt(err, f),
+        }
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    #[inline(always)]
+    fn from(err: E) -> Self {
+        AppError::Internal(err.into())
+    }
+}
+
+impl IntoResponse for AppError {
+    #[inline(always)]
+    fn into_response(self) -> Response {
+        match self {
+            AppError::NoSuchContainer => StatusCode::NOT_FOUND.into_response(),
+            AppError::AssertionFailed(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
+            AppError::NonUtf8Header => StatusCode::BAD_REQUEST.into_response(),
+            AppError::Internal(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
+            }
+        }
+    }
 }
 
 impl PublishedContainer {
@@ -60,9 +111,10 @@ impl ReverseProxy {
     }
 }
 
-async fn reverse_proxy(State(rp): State<Arc<ReverseProxy>>, request: Request) -> Response<Body> {
-    // TODO: This needs a proper AppError and return a `Result`, similar to `Registry`.
-
+async fn reverse_proxy(
+    State(rp): State<Arc<ReverseProxy>>,
+    request: Request,
+) -> Result<Response<Body>, AppError> {
     // Determine rewritten URL.
     let req_uri = request.uri();
 
@@ -72,8 +124,14 @@ async fn reverse_proxy(State(rp): State<Arc<ReverseProxy>>, request: Request) ->
         .filter(|segment| !segment.is_empty());
 
     let image_location = ImageLocation::new(
-        segments.next().expect("TODO").to_owned(),
-        segments.next().expect("TODO").to_owned(),
+        segments
+            .next()
+            .ok_or(AppError::AssertionFailed("repository segment disappeared"))?
+            .to_owned(),
+        segments
+            .next()
+            .ok_or(AppError::AssertionFailed("image segment disappeared"))?
+            .to_owned(),
     );
 
     // TODO: Return better error (404?).
@@ -82,7 +140,7 @@ async fn reverse_proxy(State(rp): State<Arc<ReverseProxy>>, request: Request) ->
         .read()
         .await
         .get(&image_location)
-        .expect("TODO")
+        .ok_or(AppError::NoSuchContainer)?
         .host_addr;
     let base_url = format!("http://{dest_addr}");
 
@@ -105,11 +163,10 @@ async fn reverse_proxy(State(rp): State<Arc<ReverseProxy>>, request: Request) ->
     trace!(%dest_uri, "reverse proxying");
 
     // Note: `reqwest` and `axum` currently use different versions of `http`
-    let method = request
-        .method()
-        .to_string()
-        .parse()
-        .expect("method http version mismatch workaround failed");
+    let method =
+        request.method().to_string().parse().map_err(|_| {
+            AppError::AssertionFailed("method http version mismatch workaround failed")
+        })?;
     let response = rp.client.request(method, &dest_uri).send().await;
 
     match response {
@@ -121,19 +178,22 @@ async fn reverse_proxy(State(rp): State<Arc<ReverseProxy>>, request: Request) ->
                 }
 
                 let key_string = key.to_string();
-                let value_str = value.to_str().expect("TODO:Handle");
+                let value_str = value.to_str().map_err(|_| AppError::NonUtf8Header)?;
 
                 bld = bld.header(key_string, value_str);
             }
-            bld.body(Body::from(response.bytes().await.expect("TODO: Handle")))
-                .expect("should not fail to construct response")
+            Ok(bld
+                .body(Body::from(response.bytes().await?))
+                .map_err(|_| AppError::AssertionFailed("should not fail to construct response"))?)
         }
         Err(err) => {
             warn!(%err, %dest_uri, "failed request");
-            Response::builder()
+            Ok(Response::builder()
                 .status(500)
                 .body(Body::empty())
-                .expect("should not fail to construct error response")
+                .map_err(|_| {
+                    AppError::AssertionFailed("should not fail to construct error response")
+                })?)
         }
     }
 }
