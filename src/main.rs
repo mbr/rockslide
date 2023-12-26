@@ -172,8 +172,11 @@ impl RegistryHooks for PodmanHook {
                 production_tag
             );
 
-            info!(%name, "starting container");
+            // We always pull the container to ensure we have the latest version.
+            info!(%name, "pulling container");
+            try_quiet!(self.podman.pull(&image_url), "failed to pull container");
 
+            info!(%name, "starting container");
             try_quiet!(
                 self.podman
                     .run(&image_url)

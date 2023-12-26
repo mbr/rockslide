@@ -43,6 +43,16 @@ impl Podman {
         fetch_json(cmd)
     }
 
+    pub(crate) fn pull(&self, image: &str) -> Result<(), CommandError> {
+        let mut cmd = self.mk_podman_command();
+        cmd.arg("pull");
+        cmd.arg(image);
+        cmd.arg("--tls-verify=false");
+
+        checked_output(cmd)?;
+        Ok(())
+    }
+
     pub(crate) fn run(&self, image_url: &str) -> StartCommand {
         StartCommand {
             podman: self,
