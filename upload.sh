@@ -20,6 +20,7 @@ TARGET=$1
 
 nix-build .
 
+ssh root@$TARGET "systemctl stop rockslide || true"
 scp result/bin/rockslide root@$TARGET:/usr/local/bin/rockslide
 scp etc/rockslide.service root@$TARGET:/etc/systemd/system/rockslide.service
 scp etc/setup.sh root@$TARGET:/root/
