@@ -228,7 +228,7 @@ async fn main() -> anyhow::Result<()> {
     let hooks = PodmanHook::new(&cfg.containers.podman_path, reverse_proxy.clone());
     hooks.updated_published_set().await;
 
-    let registry = DockerRegistry::new(&cfg.registry.storage_path, hooks);
+    let registry = DockerRegistry::new(&cfg.registry.storage_path, hooks, cfg.rockslide.master_key);
 
     let app = Router::new()
         .merge(registry.make_router())

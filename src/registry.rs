@@ -98,13 +98,18 @@ pub(crate) struct DockerRegistry {
 }
 
 impl DockerRegistry {
-    pub(crate) fn new<P: AsRef<std::path::Path>, T: RegistryHooks + 'static>(
+    pub(crate) fn new<
+        P: AsRef<std::path::Path>,
+        T: RegistryHooks + 'static,
+        A: AuthProvider + 'static,
+    >(
         storage_path: P,
         hooks: T,
+        auth_provider: A,
     ) -> Arc<Self> {
         Arc::new(DockerRegistry {
-            realm: "TODO REGISTRY".to_string(),
-            auth_provider: Box::new(()),
+            realm: "ContainerRegistry".to_string(),
+            auth_provider: Box::new(auth_provider),
             storage: Box::new(FilesystemStorage::new(storage_path).expect("inaccessible storage")),
             hooks: Box::new(hooks),
         })

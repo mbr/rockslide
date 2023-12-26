@@ -86,17 +86,6 @@ pub(crate) trait AuthProvider: Send + Sync {
 }
 
 #[async_trait]
-impl AuthProvider for () {
-    async fn check_credentials(&self, _creds: &UnverifiedCredentials) -> bool {
-        true
-    }
-
-    async fn has_access_to(&self, _username: &str, _namespace: &str, _image: &str) -> bool {
-        true
-    }
-}
-
-#[async_trait]
 impl AuthProvider for bool {
     async fn check_credentials(&self, _creds: &UnverifiedCredentials) -> bool {
         *self
@@ -104,5 +93,21 @@ impl AuthProvider for bool {
 
     async fn has_access_to(&self, _username: &str, _namespace: &str, _image: &str) -> bool {
         *self
+    }
+}
+
+#[async_trait]
+impl<T> AuthProvider for Box<T>
+where
+    T: AuthProvider,
+{
+    #[inline(always)]
+    async fn check_credentials(&self, creds: &UnverifiedCredentials) -> bool {
+        <T as AuthProvider>::check_credentials(self, creds).await
+    }
+
+    #[inline(always)]
+    async fn has_access_to(&self, username: &str, namespace: &str, image: &str) -> bool {
+        <T as AuthProvider>::has_access_to(self, username, namespace, image).await
     }
 }
