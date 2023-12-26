@@ -8,6 +8,7 @@ use serde::Deserialize;
 use crate::registry::{AuthProvider, UnverifiedCredentials};
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default)]
     pub rockslide: RockslideConfig,
@@ -20,6 +21,7 @@ pub(crate) struct Config {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RockslideConfig {
     #[serde(default)]
     pub master_key: MasterKey,
@@ -80,6 +82,7 @@ impl Default for RockslideConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RegistryConfig {
     #[serde(default = "default_storage_path")]
     pub storage_path: PathBuf,
@@ -98,6 +101,7 @@ fn default_storage_path() -> PathBuf {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ContainerConfig {
     #[serde(default = "default_podman_path")]
     pub podman_path: PathBuf,
@@ -116,6 +120,7 @@ fn default_podman_path() -> PathBuf {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ReverseProxyConfig {
     #[serde(default = "default_http_bind")]
     pub http_bind: SocketAddr,
