@@ -44,7 +44,7 @@ use uuid::Uuid;
 pub(crate) use {
     auth::{AuthProvider, UnverifiedCredentials},
     hooks::RegistryHooks,
-    storage::{ManifestReference, Reference},
+    storage::{FilesystemStorageError, ManifestReference, Reference},
 };
 
 #[derive(Debug)]
@@ -106,13 +106,13 @@ impl ContainerRegistry {
         storage_path: P,
         hooks: T,
         auth_provider: A,
-    ) -> Arc<Self> {
-        Arc::new(ContainerRegistry {
+    ) -> Result<Arc<Self>, FilesystemStorageError> {
+        Ok(Arc::new(ContainerRegistry {
             realm: "ContainerRegistry".to_string(),
             auth_provider: Box::new(auth_provider),
-            storage: Box::new(FilesystemStorage::new(storage_path).expect("inaccessible storage")),
+            storage: Box::new(FilesystemStorage::new(storage_path)?),
             hooks: Box::new(hooks),
-        })
+        }))
     }
 
     pub(crate) fn make_router(self: Arc<ContainerRegistry>) -> Router {
@@ -518,7 +518,8 @@ mod tests {
         let password = "random-test-password".to_owned();
         let master_key = MasterKey::new_key(password.clone());
 
-        let registry = ContainerRegistry::new(tmp.as_ref(), (), master_key);
+        let registry = ContainerRegistry::new(tmp.as_ref(), (), master_key)
+            .expect("should not fail to create app");
         let router = registry
             .clone()
             .make_router()

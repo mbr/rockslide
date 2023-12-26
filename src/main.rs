@@ -229,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
     hooks.updated_published_set().await;
 
     let registry =
-        ContainerRegistry::new(&cfg.registry.storage_path, hooks, cfg.rockslide.master_key);
+        ContainerRegistry::new(&cfg.registry.storage_path, hooks, cfg.rockslide.master_key)?;
 
     let app = Router::new()
         .merge(registry.make_router())

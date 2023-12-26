@@ -230,6 +230,22 @@ pub(crate) trait RegistryStorage: Send + Sync {
     ) -> Result<Digest, Error>;
 }
 
+#[derive(Debug, Error)]
+pub(crate) enum FilesystemStorageError {
+    #[error("could not canonicalize root {}", path.display())]
+    CouldNotCanonicalizeRoot {
+        path: PathBuf,
+        #[source]
+        err: io::Error,
+    },
+    #[error("could not create directory {}", path.display())]
+    FailedToCreateDir {
+        path: PathBuf,
+        #[source]
+        err: io::Error,
+    },
+}
+
 #[derive(Debug)]
 pub(crate) struct FilesystemStorage {
     uploads: PathBuf,
@@ -240,8 +256,14 @@ pub(crate) struct FilesystemStorage {
 }
 
 impl FilesystemStorage {
-    pub(crate) fn new<P: AsRef<Path>>(root: P) -> Result<Self, io::Error> {
-        let root = root.as_ref().canonicalize()?;
+    pub(crate) fn new<P: AsRef<Path>>(root: P) -> Result<Self, FilesystemStorageError> {
+        let raw_root = root.as_ref();
+        let root = raw_root.canonicalize().map_err(|err| {
+            FilesystemStorageError::CouldNotCanonicalizeRoot {
+                path: raw_root.to_owned(),
+                err,
+            }
+        })?;
 
         let uploads = root.join("uploads");
         let blobs = root.join("blobs");
@@ -251,7 +273,10 @@ impl FilesystemStorage {
 
         for dir in [&uploads, &blobs, &manifests, &tags] {
             if !dir.exists() {
-                fs::create_dir(dir)?;
+                fs::create_dir(dir).map_err(|err| FilesystemStorageError::FailedToCreateDir {
+                    path: dir.to_owned(),
+                    err,
+                })?;
             }
         }
 
