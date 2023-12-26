@@ -39,14 +39,20 @@ macro_rules! try_quiet {
 struct PodmanHook {
     podman: Podman,
     reverse_proxy: Arc<ReverseProxy>,
+    local_addr: SocketAddr,
 }
 
 impl PodmanHook {
-    fn new<P: AsRef<Path>>(podman_path: P, reverse_proxy: Arc<ReverseProxy>) -> Self {
+    fn new<P: AsRef<Path>>(
+        podman_path: P,
+        reverse_proxy: Arc<ReverseProxy>,
+        local_addr: SocketAddr,
+    ) -> Self {
         let podman = Podman::new(podman_path);
         Self {
             podman,
             reverse_proxy,
+            local_addr,
         }
     }
 
@@ -158,11 +164,9 @@ impl RegistryHooks for PodmanHook {
             info!(%name, "removing (potentially nonexistant) container");
             try_quiet!(self.podman.rm(&name, true), "failed to remove container");
 
-            // TODO: Determine URL automatically.
-            let local_registry_url = "127.0.0.1:3000";
             let image_url = format!(
                 "{}/{}/{}:{}",
-                local_registry_url,
+                self.local_addr,
                 location.repository(),
                 location.image(),
                 production_tag
@@ -223,9 +227,16 @@ async fn main() -> anyhow::Result<()> {
 
     debug!(?cfg, "loaded configuration");
 
+    let local_addr = SocketAddr::from(([127, 0, 0, 1], cfg.reverse_proxy.http_bind.port()));
+    info!(%local_addr, "guessing local registry address");
+
     let reverse_proxy = ReverseProxy::new();
 
-    let hooks = PodmanHook::new(&cfg.containers.podman_path, reverse_proxy.clone());
+    let hooks = PodmanHook::new(
+        &cfg.containers.podman_path,
+        reverse_proxy.clone(),
+        local_addr,
+    );
     hooks.updated_published_set().await;
 
     let registry =
