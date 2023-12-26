@@ -71,7 +71,13 @@ impl Podman {
     }
 
     fn mk_podman_command(&self) -> Command {
-        Command::new(&self.podman_path)
+        let mut cmd = Command::new(&self.podman_path);
+
+        // Since we are running as a system service, we usually do not have the luxury of a
+        // user-level systemd available, thus use `cgroupfs` as the cgroup manager.
+        cmd.arg("--cgroup-manager=cgroupfs");
+
+        cmd
     }
 }
 
