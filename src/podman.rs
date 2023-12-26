@@ -134,6 +134,10 @@ impl<'a> StartCommand<'a> {
 
         cmd.arg("run");
         cmd.arg(format!("--tls-verify={}", self.tls_verify));
+
+        // Disable health checks, since these also require a running systemd by default.
+        cmd.arg("--health-cmd=none");
+
         cmd.arg("--detach");
 
         if self.rm {
