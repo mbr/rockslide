@@ -19,7 +19,6 @@ use super::{
 #[derive(Debug)]
 pub(crate) struct UnverifiedCredentials {
     pub username: String,
-    #[allow(dead_code)] // TODO
     pub password: Secret<String>,
 }
 
@@ -80,22 +79,10 @@ impl FromRequestParts<Arc<DockerRegistry>> for ValidUser {
 #[async_trait]
 pub(crate) trait AuthProvider: Send + Sync {
     /// Determine whether the supplied credentials are valid.
-
     async fn check_credentials(&self, creds: &UnverifiedCredentials) -> bool;
+
     /// Check if the given user has access to the given repo.
-
     async fn has_access_to(&self, username: &str, namespace: &str, image: &str) -> bool;
-}
-
-#[async_trait]
-impl AuthProvider for () {
-    async fn check_credentials(&self, _creds: &UnverifiedCredentials) -> bool {
-        true
-    }
-
-    async fn has_access_to(&self, _username: &str, _namespace: &str, _image: &str) -> bool {
-        true
-    }
 }
 
 #[async_trait]
@@ -106,5 +93,21 @@ impl AuthProvider for bool {
 
     async fn has_access_to(&self, _username: &str, _namespace: &str, _image: &str) -> bool {
         *self
+    }
+}
+
+#[async_trait]
+impl<T> AuthProvider for Box<T>
+where
+    T: AuthProvider,
+{
+    #[inline(always)]
+    async fn check_credentials(&self, creds: &UnverifiedCredentials) -> bool {
+        <T as AuthProvider>::check_credentials(self, creds).await
+    }
+
+    #[inline(always)]
+    async fn has_access_to(&self, username: &str, namespace: &str, image: &str) -> bool {
+        <T as AuthProvider>::has_access_to(self, username, namespace, image).await
     }
 }

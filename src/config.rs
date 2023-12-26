@@ -1,9 +1,14 @@
 use std::{net::SocketAddr, path::PathBuf};
 
+use axum::async_trait;
+use constant_time_eq::constant_time_eq;
 use sec::Secret;
 use serde::Deserialize;
 
+use crate::registry::{AuthProvider, UnverifiedCredentials};
+
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default)]
     pub rockslide: RockslideConfig,
@@ -16,6 +21,7 @@ pub(crate) struct Config {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RockslideConfig {
     #[serde(default)]
     pub master_key: MasterKey,
@@ -28,6 +34,34 @@ pub(crate) enum MasterKey {
     #[default]
     Locked,
     Key(Secret<String>),
+}
+
+impl MasterKey {
+    #[cfg(test)]
+    #[inline(always)]
+    pub(crate) fn new_key(key: String) -> MasterKey {
+        MasterKey::Key(Secret::new(key))
+    }
+}
+
+#[async_trait]
+impl AuthProvider for MasterKey {
+    #[inline]
+    async fn check_credentials(&self, creds: &UnverifiedCredentials) -> bool {
+        match self {
+            MasterKey::Locked => false,
+            MasterKey::Key(sec_pw) => constant_time_eq(
+                creds.password.reveal_str().as_bytes(),
+                sec_pw.reveal_str().as_bytes(),
+            ),
+        }
+    }
+
+    /// Check if the given user has access to the given repo.
+    #[inline]
+    async fn has_access_to(&self, _username: &str, _namespace: &str, _image: &str) -> bool {
+        true
+    }
 }
 
 impl<'de> Deserialize<'de> for MasterKey {
@@ -56,6 +90,7 @@ impl Default for RockslideConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RegistryConfig {
     #[serde(default = "default_storage_path")]
     pub storage_path: PathBuf,
@@ -74,6 +109,7 @@ fn default_storage_path() -> PathBuf {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ContainerConfig {
     #[serde(default = "default_podman_path")]
     pub podman_path: PathBuf,
@@ -92,6 +128,7 @@ fn default_podman_path() -> PathBuf {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ReverseProxyConfig {
     #[serde(default = "default_http_bind")]
     pub http_bind: SocketAddr,
