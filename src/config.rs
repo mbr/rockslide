@@ -36,6 +36,14 @@ pub(crate) enum MasterKey {
     Key(Secret<String>),
 }
 
+impl MasterKey {
+    #[cfg(test)]
+    #[inline(always)]
+    pub(crate) fn new_key(key: String) -> MasterKey {
+        MasterKey::Key(Secret::new(key))
+    }
+}
+
 #[async_trait]
 impl AuthProvider for MasterKey {
     #[inline]

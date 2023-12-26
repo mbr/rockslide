@@ -475,40 +475,54 @@ mod tests {
         },
         routing::RouterIntoService,
     };
+    use base64::Engine;
     use http_body_util::BodyExt;
     use tempdir::TempDir;
     use tokio::io::AsyncWriteExt;
     use tower::{util::ServiceExt, Service};
     use tower_http::trace::TraceLayer;
 
-    use crate::registry::{
-        storage::{ImageLocation, ManifestReference, Reference},
-        ImageDigest,
+    use crate::{
+        config::MasterKey,
+        registry::{
+            storage::{ImageLocation, ManifestReference, Reference},
+            ImageDigest,
+        },
     };
 
     use super::{storage::Digest, DockerRegistry};
 
     struct Context {
         _tmp: TempDir,
-        _password: String,
+        password: String,
         registry: Arc<DockerRegistry>,
     }
 
     impl Context {
-        fn basic_auth(&self) -> &str {
-            "Basic Zml4bWU="
+        fn basic_auth(&self) -> String {
+            let encoded = base64::prelude::BASE64_STANDARD
+                .encode(&format!("user:{}", self.password).as_bytes());
+            format!("Basic {}", encoded)
+        }
+
+        fn invalid_basic_auth(&self) -> String {
+            let not_the_password = "user:not-the-password".to_owned() + self.password.as_str();
+            let encoded = base64::prelude::BASE64_STANDARD.encode(not_the_password.as_bytes());
+            format!("Basic {}", encoded)
         }
     }
 
     fn mk_test_app() -> (Context, RouterIntoService<Body>) {
         let tmp = TempDir::new("rockslide-test").expect("could not create temporary directory");
 
-        let registry = DockerRegistry::new(tmp.as_ref(), ());
+        let password = "random-test-password".to_owned();
+        let master_key = MasterKey::new_key(password.clone());
+
+        let registry = DockerRegistry::new(tmp.as_ref(), (), master_key);
         let router = registry
             .clone()
             .make_router()
             .layer(TraceLayer::new_for_http());
-        let password = "asdf - FIXME, implement actual auth".to_owned();
 
         let service = router.into_service::<Body>();
 
@@ -516,7 +530,7 @@ mod tests {
             Context {
                 registry,
                 _tmp: tmp,
-                _password: password,
+                password,
             },
             service,
         )
@@ -545,7 +559,18 @@ mod tests {
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
             // Wrong credentials should also not grant access.
-            // TODO: Check invalid credentials are rejected.
+            let response = app
+                .call(
+                    Request::builder()
+                        .method(method)
+                        .uri(endpoint)
+                        .header(AUTHORIZATION, ctx.invalid_basic_auth())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
             // Finally a valid set should grant access.
             let response = app
