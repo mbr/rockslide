@@ -3,7 +3,11 @@ let
     "https://github.com/oxalica/rust-overlay/archive/7c94410d52d4e8bd72803fc1fe6c51fe179edaf5.tar.gz"));
 in { pkgs ? (import <nixpkgs>) { overlays = [ rust-overlay ]; } }:
 let
-  target = "x86_64-unknown-linux-musl";
+  # MacOS X is supported as tier 2, for development purposes.
+  isMacOS = pkgs.stdenv.isDarwin;
+  # We compile to a static binary on Linux, which is also used to create releases, otherwise use the default.
+  # Right now, we hardcode Apple silicon macs.
+  target = if isMacOS then "aarch64-apple-darwin" else "x86_64-unknown-linux-musl";
   stable-rust = pkgs.rust-bin.stable.latest.default.override {
     extensions = [ "rust-src" ];
     targets = [ target ];
