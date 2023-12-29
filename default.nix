@@ -27,7 +27,8 @@ in rustPlatform.buildRustPackage {
   cargoLock = { lockFile = ./Cargo.lock; };
   # Note that we don't really need `podman` as a native build input, but it is
   # helpful for running locally in a `nix-shell`.
-  nativeBuildInputs = with pkgs; [ podman ];
+  nativeBuildInputs = with pkgs; [ podman ]
+    ++ (if isMacOS then with darwin.apple_sdk.frameworks; [ SystemConfiguration ] else []);
   buildPhase = "./build.sh";
   installPhase = ''
     mkdir -p $out/bin
