@@ -51,7 +51,8 @@ impl PodmanHook {
         local_addr: SocketAddr,
         registry_credentials: (String, Secret<String>),
     ) -> Self {
-        let podman = Podman::new(podman_path);
+        let is_remote = env::var("PODMAN_IS_REMOTE").unwrap_or_default() == "true";
+        let podman = Podman::new(podman_path, is_remote);
         Self {
             podman,
             reverse_proxy,

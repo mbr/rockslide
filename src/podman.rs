@@ -6,6 +6,7 @@ use std::{
 };
 
 use sec::Secret;
+use tempfile::tempfile;
 use tokio::process::Command;
 use tracing::{debug, trace};
 
@@ -13,13 +14,15 @@ use tracing::{debug, trace};
 pub(crate) struct Podman {
     /// Path to the podman binary.
     podman_path: PathBuf,
+    is_remote: bool,
 }
 
 impl Podman {
     /// Creates a new podman handle.
-    pub(crate) fn new<P: AsRef<Path>>(podman_path: P) -> Self {
+    pub(crate) fn new<P: AsRef<Path>>(podman_path: P, is_remote: bool) -> Self {
         Self {
             podman_path: podman_path.as_ref().into(),
+            is_remote,
         }
     }
 
@@ -50,12 +53,12 @@ impl Podman {
 
         cmd.arg(registry);
 
-        let mut pw_file = memfile::MemFile::create("rockslide podman pw", Default::default())?;
+        let mut pw_file = tempfile()?;
 
         pw_file.write(password.reveal().as_bytes())?;
         pw_file.seek(SeekFrom::Start(0))?;
 
-        cmd.stdin(Stdio::from(pw_file.into_fd()));
+        cmd.stdin(Stdio::from(pw_file));
 
         checked_output(cmd).await?;
 
@@ -116,9 +119,11 @@ impl Podman {
     fn mk_podman_command(&self) -> Command {
         let mut cmd = Command::new(&self.podman_path);
 
-        // Since we are running as a system service, we usually do not have the luxury of a
-        // user-level systemd available, thus use `cgroupfs` as the cgroup manager.
-        cmd.arg("--cgroup-manager=cgroupfs").kill_on_drop(true);
+        if !self.is_remote {
+            // Since we are running as a system service, we usually do not have the luxury of a
+            // user-level systemd available, thus use `cgroupfs` as the cgroup manager.
+            cmd.arg("--cgroup-manager=cgroupfs").kill_on_drop(true);
+        }
 
         cmd
     }
