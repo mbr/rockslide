@@ -13,13 +13,13 @@ constant_time_eq = "0.3.0"
 futures = "0.3.29"
 hex = "0.4.3"
 itertools = "0.12.0"
-memfile = "0.3.2"
 nom = "7.1.3"
 reqwest = { version = "0.11.23", default-features = false }
 sec = { version = "1.0.0", features = ["deserialize"] }
 serde = { version = "1.0.193", features = [ "derive" ] }
 serde_json = "1.0.108"
 sha2 = "0.10.8"
+tempfile = "3.9.0"
 thiserror = "1.0.50"
 tokio = { version = "1.34.0", features = [ "rt-multi-thread", "macros", "fs", "process" ] }
 tokio-util = { version = "0.7.10", features = [ "io" ] }

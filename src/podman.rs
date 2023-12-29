@@ -6,6 +6,7 @@ use std::{
 };
 
 use sec::Secret;
+use tempfile::tempfile;
 use tokio::process::Command;
 use tracing::{debug, trace};
 
@@ -50,12 +51,12 @@ impl Podman {
 
         cmd.arg(registry);
 
-        let mut pw_file = memfile::MemFile::create("rockslide podman pw", Default::default())?;
+        let mut pw_file = tempfile()?;
 
         pw_file.write(password.reveal().as_bytes())?;
         pw_file.seek(SeekFrom::Start(0))?;
 
-        cmd.stdin(Stdio::from(pw_file.into_fd()));
+        cmd.stdin(Stdio::from(pw_file));
 
         checked_output(cmd).await?;
 
