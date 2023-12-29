@@ -28,7 +28,7 @@ in rustPlatform.buildRustPackage {
   # Note that we don't really need `podman` as a native build input, but it is
   # helpful for running locally in a `nix-shell`.
   nativeBuildInputs = with pkgs; [ podman ]
-    ++ (if isMacOS then with darwin.apple_sdk.frameworks; [ SystemConfiguration ] else []);
+    ++ (if isMacOS then with darwin.apple_sdk.frameworks; [ SystemConfiguration qemu ] else []);
   buildPhase = "./build.sh";
   installPhase = ''
     mkdir -p $out/bin
