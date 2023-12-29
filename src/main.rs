@@ -5,7 +5,7 @@ mod reverse_proxy;
 
 use std::{
     env, fs,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs},
     path::Path,
     str::FromStr,
     sync::Arc,
@@ -14,6 +14,7 @@ use std::{
 use anyhow::Context;
 use axum::{async_trait, Router};
 use config::Config;
+use gethostname::gethostname;
 use podman::Podman;
 use registry::{
     storage::ImageLocation, ContainerRegistry, ManifestReference, Reference, RegistryHooks,
@@ -51,8 +52,7 @@ impl PodmanHook {
         local_addr: SocketAddr,
         registry_credentials: (String, Secret<String>),
     ) -> Self {
-        let is_remote = env::var("PODMAN_IS_REMOTE").unwrap_or_default() == "true";
-        let podman = Podman::new(podman_path, is_remote);
+        let podman = Podman::new(podman_path, podman_is_remote());
         Self {
             podman,
             reverse_proxy,
@@ -86,6 +86,10 @@ impl PodmanHook {
             .update_containers(running.into_iter())
             .await;
     }
+}
+
+pub(crate) fn podman_is_remote() -> bool {
+    env::var("PODMAN_IS_REMOTE").unwrap_or_default() == "true"
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,7 +259,25 @@ async fn main() -> anyhow::Result<()> {
 
     debug!(?cfg, "loaded configuration");
 
-    let local_addr = SocketAddr::from(([127, 0, 0, 1], cfg.reverse_proxy.http_bind.port()));
+    let local_ip: IpAddr = if podman_is_remote() {
+        info!("podman is remote, trying to guess IP address");
+        let local_hostname = gethostname();
+        let dummy_addr = (
+            local_hostname
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("local hostname is not valid UTF8"))?,
+            12345,
+        )
+            .to_socket_addrs()
+            .ok()
+            .and_then(|addrs| addrs.into_iter().next())
+            .ok_or_else(|| anyhow::anyhow!("failed to resolve local hostname"))?;
+        dummy_addr.ip()
+    } else {
+        [127, 0, 0, 1].into()
+    };
+
+    let local_addr = SocketAddr::from((local_ip, cfg.reverse_proxy.http_bind.port()));
     info!(%local_addr, "guessing local registry address");
 
     let reverse_proxy = ReverseProxy::new();
