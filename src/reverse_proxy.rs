@@ -3,7 +3,7 @@ use std::{
     fmt::{self, Display},
     mem,
     net::SocketAddr,
-    str::FromStr,
+    str::{self, FromStr},
     sync::Arc,
 };
 
@@ -11,6 +11,7 @@ use axum::{
     body::Body,
     extract::{Request, State},
     http::{
+        header::HOST,
         uri::{Authority, Parts, PathAndQuery, Scheme},
         StatusCode, Uri,
     },
@@ -96,7 +97,22 @@ impl RoutingTable {
         let req_uri = request.uri();
 
         // First, attempt to match a domain.
-        let opt_domain = req_uri.host().and_then(Domain::new);
+        let opt_domain = if let Some(host_header) = request
+            .headers()
+            .get(HOST)
+            .and_then(|h| str::from_utf8(h.as_bytes()).ok())
+        {
+            let candidate = if let Some(colon) = host_header.rfind(':') {
+                &host_header[..colon]
+            } else {
+                host_header
+            };
+
+            Domain::new(candidate)
+        } else {
+            None
+        };
+
         if let Some(pc) = opt_domain.and_then(|domain| self.get_domain_route(&domain)) {
             // We only need to swap the protocol and domain and we're good to go.
             let mut parts = req_uri.clone().into_parts();
