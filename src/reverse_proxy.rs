@@ -20,13 +20,66 @@ use tracing::{trace, warn};
 
 pub(crate) struct ReverseProxy {
     client: reqwest::Client,
-    containers: RwLock<HashMap<ImageLocation, PublishedContainer>>,
+    routing_table: RwLock<RoutingTable>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PublishedContainer {
     host_addr: SocketAddr,
     image_location: ImageLocation,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RoutingTable {
+    path_maps: HashMap<ImageLocation, PublishedContainer>,
+    domain_maps: HashMap<Domain, PublishedContainer>,
+}
+
+impl RoutingTable {
+    #[inline(always)]
+    fn get_path_route(&self, image_location: &ImageLocation) -> Option<&PublishedContainer> {
+        self.path_maps.get(image_location)
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq)]
+struct Domain(String);
+
+impl Domain {
+    fn new(raw: &str) -> Option<Self> {
+        let domain_name = raw.to_lowercase();
+        if !domain_name.contains('.') {
+            return None;
+        }
+
+        Some(Self(domain_name))
+    }
+}
+
+impl PartialEq<String> for Domain {
+    fn eq(&self, other: &String) -> bool {
+        other.to_lowercase() == self.0
+    }
+}
+
+impl RoutingTable {
+    fn from_containers(containers: impl IntoIterator<Item = PublishedContainer>) -> Self {
+        let mut path_maps = HashMap::new();
+        let mut domain_maps = HashMap::new();
+
+        for container in containers {
+            if let Some(domain) = Domain::new(&container.image_location.repository()) {
+                domain_maps.insert(domain, container.clone());
+            }
+
+            path_maps.insert(container.image_location.clone(), container);
+        }
+
+        Self {
+            path_maps,
+            domain_maps,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -86,7 +139,7 @@ impl ReverseProxy {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(ReverseProxy {
             client: reqwest::Client::new(),
-            containers: RwLock::new(HashMap::new()),
+            routing_table: RwLock::new(Default::default()),
         })
     }
 
@@ -102,12 +155,10 @@ impl ReverseProxy {
         &self,
         containers: impl Iterator<Item = PublishedContainer>,
     ) {
-        let mut new_mapping = containers
-            .map(|pc| (pc.image_location.clone(), pc))
-            .collect();
+        let mut routing_table = RoutingTable::from_containers(containers);
 
-        let mut guard = self.containers.write().await;
-        mem::swap(&mut *guard, &mut new_mapping);
+        let mut guard = self.routing_table.write().await;
+        mem::swap(&mut *guard, &mut routing_table);
     }
 }
 
@@ -136,10 +187,10 @@ async fn reverse_proxy(
 
     // TODO: Return better error (404?).
     let dest_addr = rp
-        .containers
+        .routing_table
         .read()
         .await
-        .get(&image_location)
+        .get_path_route(&image_location)
         .ok_or(AppError::NoSuchContainer)?
         .host_addr;
     let base_url = format!("http://{dest_addr}");
