@@ -2,7 +2,7 @@
 
 export REGISTRY_ADDR=127.0.0.1:3000
 
-if [ $PODMAN_IS_REMOTE == "true" ]; then
+if [ "x$PODMAN_IS_REMOTE" == "xtrue" ]; then
   export REGISTRY_ADDR=$(dig +short $(hostname)):3000
 fi
 
