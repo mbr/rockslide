@@ -11,7 +11,7 @@ use axum::{
     body::Body,
     extract::{Request, State},
     http::{
-        uri::{Authority, Scheme},
+        uri::{Authority, Parts, PathAndQuery, Scheme},
         StatusCode, Uri,
     },
     response::{IntoResponse, Response},
@@ -92,7 +92,7 @@ impl RoutingTable {
     }
 
     // TODO: Consider return a `Uri`` instead.
-    fn get_destination_uri_from_request(&self, request: &Request) -> Option<String> {
+    fn get_destination_uri_from_request(&self, request: &Request) -> Option<Uri> {
         let req_uri = request.uri();
 
         // First, attempt to match a domain.
@@ -105,11 +105,7 @@ impl RoutingTable {
                 Authority::from_str(&pc.host_addr.to_string())
                     .expect("SocketAddr should never fail to convert to Authority"),
             );
-            return Some(
-                Uri::from_parts(parts)
-                    .expect("should not have invalidated Uri")
-                    .to_string(),
-            );
+            return Some(Uri::from_parts(parts).expect("should not have invalidated Uri"));
         }
 
         // Matching a domain did not succeed, let's try with a path.
@@ -129,8 +125,12 @@ impl RoutingTable {
                     dest_path_and_query += query;
                 }
 
-                // Reassemble
-                return Some(format!("http://{container_addr}/{dest_path_and_query}"));
+                let mut parts = Parts::default();
+                parts.scheme = Some(Scheme::HTTP);
+                parts.authority = Some(Authority::from_str(&container_addr.to_string()).unwrap());
+                parts.path_and_query = Some(PathAndQuery::from_str(&dest_path_and_query).unwrap());
+
+                return Some(Uri::from_parts(parts).unwrap());
             }
         }
 
@@ -237,7 +237,6 @@ async fn route_request(
         routing_table.get_destination_uri_from_request(&request)
     };
 
-    // TODO: Return better error (404?).
     let dest = dest_uri.ok_or(AppError::NoSuchContainer)?;
     trace!(%dest, "reverse proxying");
 
@@ -246,7 +245,7 @@ async fn route_request(
         request.method().to_string().parse().map_err(|_| {
             AppError::AssertionFailed("method http version mismatch workaround failed")
         })?;
-    let response = rp.client.request(method, &dest).send().await;
+    let response = rp.client.request(method, dest.to_string()).send().await;
 
     match response {
         Ok(response) => {
