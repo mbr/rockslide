@@ -90,6 +90,52 @@ impl RoutingTable {
             domain_maps,
         }
     }
+
+    // TODO: Consider return a `Uri`` instead.
+    fn get_destination_uri_from_request(&self, request: &Request) -> Option<String> {
+        let req_uri = request.uri();
+
+        // First, attempt to match a domain.
+        let opt_domain = req_uri.host().and_then(Domain::new);
+        if let Some(pc) = opt_domain.and_then(|domain| self.get_domain_route(&domain)) {
+            // We only need to swap the protocol and domain and we're good to go.
+            let mut parts = req_uri.clone().into_parts();
+            parts.scheme = Some(Scheme::HTTP);
+            parts.authority = Some(
+                Authority::from_str(&pc.host_addr.to_string())
+                    .expect("SocketAddr should never fail to convert to Authority"),
+            );
+            return Some(
+                Uri::from_parts(parts)
+                    .expect("should not have invalidated Uri")
+                    .to_string(),
+            );
+        }
+
+        // Matching a domain did not succeed, let's try with a path.
+        // Reconstruct image location from path segments, keeping remainder intact.
+        if let Some((image_location, remainder)) = split_path_base_url(req_uri) {
+            if let Some(pc) = self.get_path_route(&image_location) {
+                let container_addr = pc.host_addr;
+
+                let mut dest_path_and_query = remainder;
+
+                if req_uri.path().ends_with('/') {
+                    dest_path_and_query.push('/');
+                }
+
+                if let Some(query) = req_uri.query() {
+                    dest_path_and_query.push('?');
+                    dest_path_and_query += query;
+                }
+
+                // Reassemble
+                return Some(format!("http://{container_addr}/{dest_path_and_query}"));
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -168,74 +214,28 @@ impl ReverseProxy {
     }
 }
 
+fn split_path_base_url(uri: &Uri) -> Option<(ImageLocation, String)> {
+    // Reconstruct image location from path segments, keeping remainder intact.
+    let mut segments = uri.path().split('/').filter(|segment| !segment.is_empty());
+
+    let image_location =
+        ImageLocation::new(segments.next()?.to_owned(), segments.next()?.to_owned());
+
+    // Now create the path, format is: '' / repository / image / ...
+    // Need to skip the first three.
+    let remainder = segments.join("/");
+
+    Some((image_location, remainder))
+}
+
 async fn route_request(
     State(rp): State<Arc<ReverseProxy>>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let req_uri = request.uri();
-
-    let opt_domain = req_uri.host().and_then(Domain::new);
-    let routing_table = rp.routing_table.read().await;
-
-    let dest_uri = if let Some(pc) =
-        opt_domain.and_then(|domain| routing_table.get_domain_route(&domain))
-    {
-        // We only need to swap the protocol and domain and we're good to go.
-        let mut parts = req_uri.clone().into_parts();
-        parts.scheme = Some(Scheme::HTTP);
-        parts.authority = Some(Authority::from_str(&pc.host_addr.to_string()).map_err(|_| {
-            anyhow::anyhow!("failed to convert container address into `Authority`")
-        })?);
-        Some(
-            Uri::from_parts(parts)
-                .map_err(|_| anyhow::anyhow!("did not expect invalid uri parts"))?
-                .to_string(),
-        )
-    } else {
-        // Reconstruct image location from path segments, keeping remainder intact.
-        let mut segments = req_uri
-            .path()
-            .split('/')
-            .filter(|segment| !segment.is_empty());
-
-        let image_location = ImageLocation::new(
-            segments
-                .next()
-                .ok_or(AppError::AssertionFailed("repository segment disappeared"))?
-                .to_owned(),
-            segments
-                .next()
-                .ok_or(AppError::AssertionFailed("image segment disappeared"))?
-                .to_owned(),
-        );
-
-        if let Some(pc) = routing_table.get_path_route(&image_location) {
-            let container_addr = pc.host_addr;
-
-            // Now create the path, format is: '' / repository / image / ...
-            // Need to skip the first three.
-            let cleaned_path = segments.join("/");
-
-            let mut dest_path_and_query = cleaned_path;
-
-            if req_uri.path().ends_with('/') {
-                dest_path_and_query.push('/');
-            }
-
-            if let Some(query) = req_uri.query() {
-                dest_path_and_query.push('?');
-                dest_path_and_query += query;
-            }
-
-            // Reassemble
-            Some(format!("http://{container_addr}/{dest_path_and_query}"))
-        } else {
-            None
-        }
+    let dest_uri = {
+        let routing_table = rp.routing_table.read().await;
+        routing_table.get_destination_uri_from_request(&request)
     };
-
-    // Release lock.
-    drop(routing_table);
 
     // TODO: Return better error (404?).
     let dest = dest_uri.ok_or(AppError::NoSuchContainer)?;
