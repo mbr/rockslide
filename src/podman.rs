@@ -89,8 +89,8 @@ impl Podman {
         Ok(())
     }
 
-    pub(crate) fn run(&self, image_url: &str) -> StartCommand {
-        StartCommand {
+    pub(crate) fn run(&self, image_url: &str) -> RunCommand {
+        RunCommand {
             podman: self,
             image_url: image_url.to_owned(),
             rm: false,
@@ -129,7 +129,7 @@ impl Podman {
     }
 }
 
-pub(crate) struct StartCommand<'a> {
+pub(crate) struct RunCommand<'a> {
     podman: &'a Podman,
     env: Vec<(String, String)>,
     image_url: String,
@@ -140,7 +140,7 @@ pub(crate) struct StartCommand<'a> {
     publish: Vec<String>,
 }
 
-impl<'a> StartCommand<'a> {
+impl<'a> RunCommand<'a> {
     pub fn env<S1: Into<String>, S2: Into<String>>(&mut self, var: S1, value: S2) -> &mut Self {
         self.env.push((var.into(), value.into()));
         self
