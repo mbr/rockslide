@@ -91,6 +91,7 @@ impl Podman {
 
     pub(crate) fn run(&self, image_url: &str) -> RunCommand {
         RunCommand {
+            annotations: Vec::new(),
             podman: self,
             image_url: image_url.to_owned(),
             rm: false,
@@ -130,6 +131,7 @@ impl Podman {
 }
 
 pub(crate) struct RunCommand<'a> {
+    annotations: Vec<(String, String)>,
     podman: &'a Podman,
     env: Vec<(String, String)>,
     image_url: String,
@@ -143,6 +145,16 @@ pub(crate) struct RunCommand<'a> {
 impl<'a> RunCommand<'a> {
     pub fn env<S1: Into<String>, S2: Into<String>>(&mut self, var: S1, value: S2) -> &mut Self {
         self.env.push((var.into(), value.into()));
+        self
+    }
+
+    #[inline]
+    pub fn annotate<S1: Into<String>, S2: Into<String>>(
+        &mut self,
+        key: S1,
+        value: S2,
+    ) -> &mut Self {
+        self.annotations.push((key.into(), value.into()));
         self
     }
 
