@@ -56,7 +56,7 @@ impl Podman {
 
         let mut pw_file = tempfile()?;
 
-        pw_file.write(password.reveal().as_bytes())?;
+        pw_file.write_all(password.reveal().as_bytes())?;
         pw_file.seek(SeekFrom::Start(0))?;
 
         cmd.stdin(Stdio::from(pw_file));

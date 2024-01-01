@@ -79,7 +79,7 @@ impl RoutingTable {
         let mut domain_maps = HashMap::new();
 
         for container in containers {
-            if let Some(domain) = Domain::new(&container.image_location.repository()) {
+            if let Some(domain) = Domain::new(container.image_location.repository()) {
                 domain_maps.insert(domain, container.clone());
             }
 
@@ -295,7 +295,7 @@ async fn route_request(
 /// HTTP/1.1 hop-by-hop headers
 mod hop_by_hop {
     use reqwest::header::HeaderName;
-    pub(super) const HOP_BY_HOP: [HeaderName; 8] = [
+    pub(super) static HOP_BY_HOP: [HeaderName; 8] = [
         HeaderName::from_static("keep-alive"),
         HeaderName::from_static("transfer-encoding"),
         HeaderName::from_static("te"),
