@@ -1,4 +1,5 @@
 use std::{
+    env,
     fmt::Display,
     io::{self, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -285,4 +286,8 @@ async fn fetch_json(cmd: Command) -> Result<serde_json::Value, CommandError> {
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
     Ok(parsed)
+}
+
+pub(crate) fn podman_is_remote() -> bool {
+    env::var("PODMAN_IS_REMOTE").unwrap_or_default() == "true"
 }
