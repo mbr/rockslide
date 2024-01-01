@@ -19,6 +19,7 @@ use axum::{
     Router,
 };
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{trace, warn};
 
@@ -33,6 +34,13 @@ pub(crate) struct ReverseProxy {
 pub(crate) struct PublishedContainer {
     host_addr: SocketAddr,
     manifest_reference: ManifestReference,
+    config: RuntimeConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct RuntimeConfig {
+    #[serde(default)]
+    http_access: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -204,6 +212,7 @@ impl PublishedContainer {
         Self {
             host_addr,
             manifest_reference,
+            config: Default::default(),
         }
     }
 
