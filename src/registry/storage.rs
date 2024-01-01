@@ -55,7 +55,7 @@ pub(crate) struct ImageLocation {
     image: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ManifestReference {
     #[serde(flatten)]
     location: ImageLocation,
@@ -97,7 +97,7 @@ impl ImageLocation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Reference {
     Tag(String),
     Digest(Digest),

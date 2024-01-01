@@ -87,6 +87,8 @@ async fn main() -> anyhow::Result<()> {
         local_addr,
         credentials,
     );
+    // TODO: Probably should not fail if synchronization fails.
+    orchestrator.synchronize_all().await?;
     orchestrator.updated_published_set().await;
 
     let registry = ContainerRegistry::new(

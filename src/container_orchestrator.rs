@@ -75,7 +75,7 @@ impl ContainerOrchestrator {
             .await;
     }
 
-    async fn update_container_running_state(&self, manifest_reference: &ManifestReference) {
+    async fn synchronize_container_state(&self, manifest_reference: &ManifestReference) {
         // TODO: Make configurable?
         let production_tag = "prod";
 
@@ -135,6 +135,15 @@ impl ContainerOrchestrator {
             info!(?manifest_reference, "new production image running");
         }
     }
+
+    pub(crate) async fn synchronize_all(&self) -> anyhow::Result<()> {
+        for container in self.fetch_managed_containers(true).await? {
+            self.synchronize_container_state(container.manifest_reference())
+                .await;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +151,7 @@ impl ContainerOrchestrator {
 #[allow(dead_code)]
 struct ContainerJson {
     id: String,
+    image: String,
     names: Vec<String>,
     #[serde(deserialize_with = "nullable_array")]
     ports: Vec<PortMapping>,
@@ -162,17 +172,31 @@ impl ContainerJson {
         None
     }
 
+    fn image_tag(&self) -> Option<Reference> {
+        let idx = self.image.rfind(':')?;
+
+        // TODO: Handle Reference::Digest here.
+        Some(Reference::Tag(self.image[idx..].to_owned()))
+    }
+
+    fn manifest_reference(&self) -> Option<ManifestReference> {
+        Some(ManifestReference::new(
+            self.image_location()?,
+            self.image_tag()?,
+        ))
+    }
+
     fn active_published_port(&self) -> Option<&PortMapping> {
         self.ports.get(0)
     }
 
     fn published_container(&self) -> Option<PublishedContainer> {
-        let image_location = self.image_location()?;
+        let manifest_reference = self.manifest_reference()?;
         let port_mapping = self.active_published_port()?;
 
         Some(PublishedContainer::new(
             port_mapping.get_host_listening_addr()?,
-            image_location,
+            manifest_reference,
         ))
     }
 }
@@ -180,8 +204,7 @@ impl ContainerJson {
 #[async_trait]
 impl RegistryHooks for ContainerOrchestrator {
     async fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
-        self.update_container_running_state(manifest_reference)
-            .await;
+        self.synchronize_container_state(manifest_reference).await;
 
         self.updated_published_set().await;
     }

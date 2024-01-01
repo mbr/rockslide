@@ -22,7 +22,7 @@ use itertools::Itertools;
 use tokio::sync::RwLock;
 use tracing::{trace, warn};
 
-use crate::registry::storage::ImageLocation;
+use crate::registry::{storage::ImageLocation, ManifestReference};
 
 pub(crate) struct ReverseProxy {
     client: reqwest::Client,
@@ -32,7 +32,7 @@ pub(crate) struct ReverseProxy {
 #[derive(Clone, Debug)]
 pub(crate) struct PublishedContainer {
     host_addr: SocketAddr,
-    image_location: ImageLocation,
+    manifest_reference: ManifestReference,
 }
 
 #[derive(Debug, Default)]
@@ -79,11 +79,12 @@ impl RoutingTable {
         let mut domain_maps = HashMap::new();
 
         for container in containers {
-            if let Some(domain) = Domain::new(container.image_location.repository()) {
+            if let Some(domain) = Domain::new(container.manifest_reference.location().repository())
+            {
                 domain_maps.insert(domain, container.clone());
             }
 
-            path_maps.insert(container.image_location.clone(), container);
+            path_maps.insert(container.manifest_reference.location().clone(), container);
         }
 
         Self {
@@ -199,11 +200,15 @@ impl IntoResponse for AppError {
 }
 
 impl PublishedContainer {
-    pub(crate) fn new(host_addr: SocketAddr, image_location: ImageLocation) -> Self {
+    pub(crate) fn new(host_addr: SocketAddr, manifest_reference: ManifestReference) -> Self {
         Self {
             host_addr,
-            image_location,
+            manifest_reference,
         }
+    }
+
+    pub(crate) fn manifest_reference(&self) -> &ManifestReference {
+        &self.manifest_reference
     }
 }
 
