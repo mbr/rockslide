@@ -81,16 +81,19 @@ async fn main() -> anyhow::Result<()> {
         "rockslide-podman".to_owned(),
         cfg.rockslide.master_key.as_secret_string(),
     );
-    let hooks = ContainerOrchestrator::new(
+    let orchestrator = ContainerOrchestrator::new(
         &cfg.containers.podman_path,
         reverse_proxy.clone(),
         local_addr,
         credentials,
     );
-    hooks.updated_published_set().await;
+    orchestrator.updated_published_set().await;
 
-    let registry =
-        ContainerRegistry::new(&cfg.registry.storage_path, hooks, cfg.rockslide.master_key)?;
+    let registry = ContainerRegistry::new(
+        &cfg.registry.storage_path,
+        orchestrator,
+        cfg.rockslide.master_key,
+    )?;
 
     let app = Router::new()
         .merge(registry.make_router())

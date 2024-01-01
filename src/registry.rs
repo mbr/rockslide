@@ -104,14 +104,14 @@ impl ContainerRegistry {
         A: AuthProvider + 'static,
     >(
         storage_path: P,
-        hooks: T,
+        orchestrator: T,
         auth_provider: A,
     ) -> Result<Arc<Self>, FilesystemStorageError> {
         Ok(Arc::new(ContainerRegistry {
             realm: "ContainerRegistry".to_string(),
             auth_provider: Box::new(auth_provider),
             storage: Box::new(FilesystemStorage::new(storage_path)?),
-            hooks: Box::new(hooks),
+            hooks: Box::new(orchestrator),
         }))
     }
 
