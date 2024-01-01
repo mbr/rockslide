@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::{net::SocketAddr, path::Path, sync::Arc};
@@ -6,12 +7,12 @@ use crate::podman::podman_is_remote;
 use crate::{
     podman::Podman,
     registry::{storage::ImageLocation, ManifestReference, Reference, RegistryHooks},
-    reverse_proxy::{PublishedContainer, ReverseProxy},
+    reverse_proxy::ReverseProxy,
 };
 
 use axum::async_trait;
 use sec::Secret;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::{debug, error, info};
 
 macro_rules! try_quiet {
@@ -31,6 +32,29 @@ pub(crate) struct ContainerOrchestrator {
     reverse_proxy: Arc<ReverseProxy>,
     local_addr: SocketAddr,
     registry_credentials: (String, Secret<String>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PublishedContainer {
+    host_addr: SocketAddr,
+    manifest_reference: ManifestReference,
+    config: RuntimeConfig,
+}
+
+impl PublishedContainer {
+    pub(crate) fn manifest_reference(&self) -> &ManifestReference {
+        &self.manifest_reference
+    }
+
+    pub(crate) fn host_addr(&self) -> SocketAddr {
+        self.host_addr
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct RuntimeConfig {
+    #[serde(default)]
+    http_access: Option<HashMap<String, String>>,
 }
 
 impl ContainerOrchestrator {
@@ -194,10 +218,11 @@ impl ContainerJson {
         let manifest_reference = self.manifest_reference()?;
         let port_mapping = self.active_published_port()?;
 
-        Some(PublishedContainer::new(
-            port_mapping.get_host_listening_addr()?,
+        Some(PublishedContainer {
+            host_addr: port_mapping.get_host_listening_addr()?,
             manifest_reference,
-        ))
+            config: Default::default(), // TODO
+        })
     }
 }
 

@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fmt::{self, Display},
     mem,
-    net::SocketAddr,
     str::{self, FromStr},
     sync::Arc,
 };
@@ -19,28 +18,14 @@ use axum::{
     Router,
 };
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{trace, warn};
 
-use crate::registry::{storage::ImageLocation, ManifestReference};
+use crate::{container_orchestrator::PublishedContainer, registry::storage::ImageLocation};
 
 pub(crate) struct ReverseProxy {
     client: reqwest::Client,
     routing_table: RwLock<RoutingTable>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PublishedContainer {
-    host_addr: SocketAddr,
-    manifest_reference: ManifestReference,
-    config: RuntimeConfig,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(crate) struct RuntimeConfig {
-    #[serde(default)]
-    http_access: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -87,12 +72,13 @@ impl RoutingTable {
         let mut domain_maps = HashMap::new();
 
         for container in containers {
-            if let Some(domain) = Domain::new(container.manifest_reference.location().repository())
+            if let Some(domain) =
+                Domain::new(container.manifest_reference().location().repository())
             {
                 domain_maps.insert(domain, container.clone());
             }
 
-            path_maps.insert(container.manifest_reference.location().clone(), container);
+            path_maps.insert(container.manifest_reference().location().clone(), container);
         }
 
         Self {
@@ -127,7 +113,7 @@ impl RoutingTable {
             let mut parts = req_uri.clone().into_parts();
             parts.scheme = Some(Scheme::HTTP);
             parts.authority = Some(
-                Authority::from_str(&pc.host_addr.to_string())
+                Authority::from_str(&pc.host_addr().to_string())
                     .expect("SocketAddr should never fail to convert to Authority"),
             );
             return Some(Uri::from_parts(parts).expect("should not have invalidated Uri"));
@@ -137,7 +123,7 @@ impl RoutingTable {
         // Reconstruct image location from path segments, keeping remainder intact.
         if let Some((image_location, remainder)) = split_path_base_url(req_uri) {
             if let Some(pc) = self.get_path_route(&image_location) {
-                let container_addr = pc.host_addr;
+                let container_addr = pc.host_addr();
 
                 let mut dest_path_and_query = remainder;
 
@@ -204,20 +190,6 @@ impl IntoResponse for AppError {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
         }
-    }
-}
-
-impl PublishedContainer {
-    pub(crate) fn new(host_addr: SocketAddr, manifest_reference: ManifestReference) -> Self {
-        Self {
-            host_addr,
-            manifest_reference,
-            config: Default::default(),
-        }
-    }
-
-    pub(crate) fn manifest_reference(&self) -> &ManifestReference {
-        &self.manifest_reference
     }
 }
 
