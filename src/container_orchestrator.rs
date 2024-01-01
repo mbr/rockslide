@@ -49,76 +49,33 @@ impl ContainerOrchestrator {
         }
     }
 
-    async fn fetch_running_containers(&self) -> anyhow::Result<Vec<ContainerJson>> {
+    async fn fetch_managed_containers(&self, all: bool) -> anyhow::Result<Vec<PublishedContainer>> {
         debug!("refreshing running containers");
 
-        let value = self.podman.ps(false).await?;
-        let rv: Vec<ContainerJson> = serde_json::from_value(value)?;
+        let value = self.podman.ps(all).await?;
+        let all_containers: Vec<ContainerJson> = serde_json::from_value(value)?;
 
-        debug!(?rv, "fetched containers");
+        debug!(?all_containers, "fetched containers");
 
-        Ok(rv)
+        Ok(all_containers
+            .iter()
+            .filter_map(ContainerJson::published_container)
+            .collect())
     }
 
     pub(crate) async fn updated_published_set(&self) {
         let running: Vec<_> = try_quiet!(
-            self.fetch_running_containers().await,
+            self.fetch_managed_containers(false).await,
             "could not fetch running containers"
-        )
-        .iter()
-        .filter_map(ContainerJson::published_container)
-        .collect();
+        );
 
         info!(?running, "updating running container set");
         self.reverse_proxy
             .update_containers(running.into_iter())
             .await;
     }
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-#[allow(dead_code)]
-struct ContainerJson {
-    id: String,
-    names: Vec<String>,
-    #[serde(deserialize_with = "nullable_array")]
-    ports: Vec<PortMapping>,
-}
-
-impl ContainerJson {
-    fn image_location(&self) -> Option<ImageLocation> {
-        const PREFIX: &str = "rockslide-";
-
-        for name in &self.names {
-            if let Some(subname) = name.strip_prefix(PREFIX) {
-                if let Some((left, right)) = subname.split_once('-') {
-                    return Some(ImageLocation::new(left.to_owned(), right.to_owned()));
-                }
-            }
-        }
-
-        None
-    }
-
-    fn active_published_port(&self) -> Option<&PortMapping> {
-        self.ports.get(0)
-    }
-
-    fn published_container(&self) -> Option<PublishedContainer> {
-        let image_location = self.image_location()?;
-        let port_mapping = self.active_published_port()?;
-
-        Some(PublishedContainer::new(
-            port_mapping.get_host_listening_addr()?,
-            image_location,
-        ))
-    }
-}
-
-#[async_trait]
-impl RegistryHooks for ContainerOrchestrator {
-    async fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
+    async fn update_container_running_state(&self, manifest_reference: &ManifestReference) {
         // TODO: Make configurable?
         let production_tag = "prod";
 
@@ -175,10 +132,58 @@ impl RegistryHooks for ContainerOrchestrator {
                 "failed to launch container"
             );
 
-            info!(?manifest_reference, "new production image uploaded");
-
-            self.updated_published_set().await;
+            info!(?manifest_reference, "new production image running");
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+#[allow(dead_code)]
+struct ContainerJson {
+    id: String,
+    names: Vec<String>,
+    #[serde(deserialize_with = "nullable_array")]
+    ports: Vec<PortMapping>,
+}
+
+impl ContainerJson {
+    fn image_location(&self) -> Option<ImageLocation> {
+        const PREFIX: &str = "rockslide-";
+
+        for name in &self.names {
+            if let Some(subname) = name.strip_prefix(PREFIX) {
+                if let Some((left, right)) = subname.split_once('-') {
+                    return Some(ImageLocation::new(left.to_owned(), right.to_owned()));
+                }
+            }
+        }
+
+        None
+    }
+
+    fn active_published_port(&self) -> Option<&PortMapping> {
+        self.ports.get(0)
+    }
+
+    fn published_container(&self) -> Option<PublishedContainer> {
+        let image_location = self.image_location()?;
+        let port_mapping = self.active_published_port()?;
+
+        Some(PublishedContainer::new(
+            port_mapping.get_host_listening_addr()?,
+            image_location,
+        ))
+    }
+}
+
+#[async_trait]
+impl RegistryHooks for ContainerOrchestrator {
+    async fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
+        self.update_container_running_state(manifest_reference)
+            .await;
+
+        self.updated_published_set().await;
     }
 }
 
