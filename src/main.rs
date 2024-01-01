@@ -38,14 +38,14 @@ macro_rules! try_quiet {
     };
 }
 
-struct PodmanHook {
+struct ContainerOrchestrator {
     podman: Podman,
     reverse_proxy: Arc<ReverseProxy>,
     local_addr: SocketAddr,
     registry_credentials: (String, Secret<String>),
 }
 
-impl PodmanHook {
+impl ContainerOrchestrator {
     fn new<P: AsRef<Path>>(
         podman_path: P,
         reverse_proxy: Arc<ReverseProxy>,
@@ -161,7 +161,7 @@ impl PortMapping {
 }
 
 #[async_trait]
-impl RegistryHooks for PodmanHook {
+impl RegistryHooks for ContainerOrchestrator {
     async fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
         // TODO: Make configurable?
         let production_tag = "prod";
@@ -286,7 +286,7 @@ async fn main() -> anyhow::Result<()> {
         "rockslide-podman".to_owned(),
         cfg.rockslide.master_key.as_secret_string(),
     );
-    let hooks = PodmanHook::new(
+    let hooks = ContainerOrchestrator::new(
         &cfg.containers.podman_path,
         reverse_proxy.clone(),
         local_addr,
