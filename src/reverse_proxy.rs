@@ -12,7 +12,7 @@ use axum::{
     http::{
         header::{CONTENT_TYPE, HOST},
         uri::{Authority, Parts, PathAndQuery, Scheme},
-        StatusCode, Uri,
+        Method, StatusCode, Uri,
     },
     response::{IntoResponse, Response},
     Router,
@@ -271,6 +271,8 @@ async fn route_request(
     let dest = match dest_uri {
         Destination::ReverseProxied(dest) => dest,
         Destination::Internal(uri) => {
+            todo!("check access (master password)");
+
             let remainder = uri
                 .path()
                 .strip_prefix("/_rockslide/config/")
@@ -290,25 +292,36 @@ async fn route_request(
                 Reference::new_tag(parts[2]),
             );
 
-            // TODO: Match GET/POST.
             let orchestrator = rp
                 .orchestrator
                 .get()
                 .ok_or_else(|| AppError::AssertionFailed("no orchestrator configured"))?;
 
-            // GET:
-            let config = orchestrator
-                .load_config(&manifest_reference)
-                .await
-                .map_err(AppError::Internal)?;
-            let config_toml =
-                toml::to_string_pretty(&config).map_err(|err| AppError::Internal(err.into()))?;
+            return match *request.method() {
+                Method::GET => {
+                    let config = orchestrator
+                        .load_config(&manifest_reference)
+                        .await
+                        .map_err(AppError::Internal)?;
+                    let config_toml = toml::to_string_pretty(&config)
+                        .map_err(|err| AppError::Internal(err.into()))?;
 
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(CONTENT_TYPE, "application/toml")
-                .body(Body::from(config_toml))
-                .map_err(|_| AppError::AssertionFailed("should not fail to build response"));
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "application/toml")
+                        .body(Body::from(config_toml))
+                        .map_err(|_| AppError::AssertionFailed("should not fail to build response"))
+                }
+                Method::PUT => {
+                    todo!("handle PUT");
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        // .header(CONTENT_TYPE, "application/toml")
+                        .body(Body::from("TODO: Replace"))
+                        .map_err(|_| AppError::AssertionFailed("should not fail to build response"))
+                }
+                _ => Err(AppError::InternalUrlInvalid),
+            };
         }
         Destination::NotFound => {
             return Err(AppError::NoSuchContainer);
