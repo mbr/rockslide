@@ -30,7 +30,6 @@ macro_rules! try_quiet {
     };
 }
 
-#[derive(Debug)]
 pub(crate) struct ContainerOrchestrator {
     podman: Podman,
     reverse_proxy: Arc<ReverseProxy>,

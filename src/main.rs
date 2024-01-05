@@ -55,6 +55,9 @@ async fn main() -> anyhow::Result<()> {
 
     debug!(?cfg, "loaded configuration");
 
+    let rockslide_pw = cfg.rockslide.master_key.as_secret_string();
+    let auth_provider = Arc::new(cfg.rockslide.master_key);
+
     let local_ip: IpAddr = if podman_is_remote() {
         info!("podman is remote, trying to guess IP address");
         let local_hostname = gethostname();
@@ -78,12 +81,9 @@ async fn main() -> anyhow::Result<()> {
     let local_addr = SocketAddr::from(([127, 0, 0, 1], cfg.reverse_proxy.http_bind.port()));
     info!(%local_addr, "guessing local registry address");
 
-    let reverse_proxy = ReverseProxy::new();
+    let reverse_proxy = ReverseProxy::new(auth_provider.clone());
 
-    let credentials = (
-        "rockslide-podman".to_owned(),
-        cfg.rockslide.master_key.as_secret_string(),
-    );
+    let credentials = ("rockslide-podman".to_owned(), rockslide_pw);
     let orchestrator = Arc::new(ContainerOrchestrator::new(
         &cfg.containers.podman_path,
         reverse_proxy.clone(),
@@ -97,11 +97,7 @@ async fn main() -> anyhow::Result<()> {
     orchestrator.synchronize_all().await?;
     orchestrator.updated_published_set().await;
 
-    let registry = ContainerRegistry::new(
-        &cfg.registry.storage_path,
-        orchestrator,
-        cfg.rockslide.master_key,
-    )?;
+    let registry = ContainerRegistry::new(&cfg.registry.storage_path, orchestrator, auth_provider)?;
 
     let app = Router::new()
         .merge(registry.make_router())

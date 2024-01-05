@@ -92,24 +92,20 @@ impl IntoResponse for AppError {
 
 pub(crate) struct ContainerRegistry {
     realm: String,
-    auth_provider: Box<dyn AuthProvider>,
+    auth_provider: Arc<dyn AuthProvider>,
     storage: Box<dyn RegistryStorage>,
     hooks: Box<dyn RegistryHooks>,
 }
 
 impl ContainerRegistry {
-    pub(crate) fn new<
-        P: AsRef<std::path::Path>,
-        T: RegistryHooks + 'static,
-        A: AuthProvider + 'static,
-    >(
+    pub(crate) fn new<P: AsRef<std::path::Path>, T: RegistryHooks + 'static>(
         storage_path: P,
         orchestrator: T,
-        auth_provider: A,
+        auth_provider: Arc<dyn AuthProvider>,
     ) -> Result<Arc<Self>, FilesystemStorageError> {
         Ok(Arc::new(ContainerRegistry {
             realm: "ContainerRegistry".to_string(),
-            auth_provider: Box::new(auth_provider),
+            auth_provider: auth_provider,
             storage: Box::new(FilesystemStorage::new(storage_path)?),
             hooks: Box::new(orchestrator),
         }))

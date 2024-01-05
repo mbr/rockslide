@@ -15,7 +15,7 @@ use axum::{
         Method, StatusCode, Uri,
     },
     response::{IntoResponse, Response},
-    Router,
+    RequestExt, Router,
 };
 use itertools::Itertools;
 use tokio::sync::RwLock;
@@ -23,11 +23,13 @@ use tracing::{trace, warn};
 
 use crate::{
     container_orchestrator::{ContainerOrchestrator, PublishedContainer},
-    registry::{storage::ImageLocation, ManifestReference, Reference},
+    registry::{
+        storage::ImageLocation, AuthProvider, ManifestReference, Reference, UnverifiedCredentials,
+    },
 };
 
-#[derive(Debug)]
 pub(crate) struct ReverseProxy {
+    auth_provider: Arc<dyn AuthProvider>,
     client: reqwest::Client,
     routing_table: RwLock<RoutingTable>,
     orchestrator: OnceLock<Arc<ContainerOrchestrator>>,
@@ -173,6 +175,7 @@ enum AppError {
     InternalUrlInvalid,
     AssertionFailed(&'static str),
     NonUtf8Header,
+    AuthFailure(StatusCode),
     Internal(anyhow::Error),
 }
 
@@ -184,6 +187,7 @@ impl Display for AppError {
             AppError::InternalUrlInvalid => f.write_str("internal url invalid"),
             AppError::AssertionFailed(msg) => f.write_str(msg),
             AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
+            AppError::AuthFailure(_) => f.write_str("authentication missing or not present"),
             AppError::Internal(err) => Display::fmt(err, f),
         }
     }
@@ -207,6 +211,7 @@ impl IntoResponse for AppError {
             AppError::InternalUrlInvalid => StatusCode::NOT_FOUND.into_response(),
             AppError::AssertionFailed(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AppError::NonUtf8Header => StatusCode::BAD_REQUEST.into_response(),
+            AppError::AuthFailure(status) => status.into_response(),
             AppError::Internal(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
@@ -215,8 +220,9 @@ impl IntoResponse for AppError {
 }
 
 impl ReverseProxy {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new(auth_provider: Arc<dyn AuthProvider>) -> Arc<Self> {
         Arc::new(ReverseProxy {
+            auth_provider,
             client: reqwest::Client::new(),
             routing_table: RwLock::new(Default::default()),
             orchestrator: OnceLock::new(),
@@ -240,6 +246,7 @@ impl ReverseProxy {
     pub(crate) fn set_orchestrator(&self, orchestrator: Arc<ContainerOrchestrator>) -> &Self {
         self.orchestrator
             .set(orchestrator)
+            .map_err(|_| ())
             .expect("set already set orchestrator");
         self
     }
@@ -271,7 +278,18 @@ async fn route_request(
     let dest = match dest_uri {
         Destination::ReverseProxied(dest) => dest,
         Destination::Internal(uri) => {
-            todo!("check access (master password)");
+            let method = request.method().clone();
+            // Note: The auth functionality has been lifted from `registry`. It may need to be
+            //       refactored out because of that.
+            let creds = request
+                .extract::<UnverifiedCredentials, _>()
+                .await
+                .map_err(AppError::AuthFailure)?;
+
+            // Any internal URL is subject to requiring auth through the master key.
+            if !rp.auth_provider.check_credentials(&creds).await {
+                todo!("return 403");
+            }
 
             let remainder = uri
                 .path()
@@ -297,7 +315,7 @@ async fn route_request(
                 .get()
                 .ok_or_else(|| AppError::AssertionFailed("no orchestrator configured"))?;
 
-            return match *request.method() {
+            return match method {
                 Method::GET => {
                     let config = orchestrator
                         .load_config(&manifest_reference)
