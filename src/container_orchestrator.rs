@@ -30,6 +30,7 @@ macro_rules! try_quiet {
     };
 }
 
+#[derive(Debug)]
 pub(crate) struct ContainerOrchestrator {
     podman: Podman,
     reverse_proxy: Arc<ReverseProxy>,
@@ -58,7 +59,7 @@ impl PublishedContainer {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct RuntimeConfig {
     #[serde(default)]
-    http_access: Option<HashMap<String, String>>,
+    http_access: HashMap<String, String>,
 }
 
 impl ContainerOrchestrator {
@@ -290,7 +291,7 @@ impl ContainerJson {
 }
 
 #[async_trait]
-impl RegistryHooks for ContainerOrchestrator {
+impl RegistryHooks for Arc<ContainerOrchestrator> {
     async fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
         self.synchronize_container_state(manifest_reference).await;
 

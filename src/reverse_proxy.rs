@@ -3,14 +3,14 @@ use std::{
     fmt::{self, Display},
     mem,
     str::{self, FromStr},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use axum::{
     body::Body,
     extract::{Request, State},
     http::{
-        header::HOST,
+        header::{CONTENT_TYPE, HOST},
         uri::{Authority, Parts, PathAndQuery, Scheme},
         StatusCode, Uri,
     },
@@ -21,11 +21,16 @@ use itertools::Itertools;
 use tokio::sync::RwLock;
 use tracing::{trace, warn};
 
-use crate::{container_orchestrator::PublishedContainer, registry::storage::ImageLocation};
+use crate::{
+    container_orchestrator::{ContainerOrchestrator, PublishedContainer},
+    registry::{storage::ImageLocation, ManifestReference, Reference},
+};
 
+#[derive(Debug)]
 pub(crate) struct ReverseProxy {
     client: reqwest::Client,
     routing_table: RwLock<RoutingTable>,
+    orchestrator: OnceLock<Arc<ContainerOrchestrator>>,
 }
 
 #[derive(Debug, Default)]
@@ -66,6 +71,13 @@ impl PartialEq<String> for Domain {
     }
 }
 
+#[derive(Debug)]
+enum Destination {
+    ReverseProxied(Uri),
+    Internal(Uri),
+    NotFound,
+}
+
 impl RoutingTable {
     fn from_containers(containers: impl IntoIterator<Item = PublishedContainer>) -> Self {
         let mut path_maps = HashMap::new();
@@ -87,8 +99,7 @@ impl RoutingTable {
         }
     }
 
-    // TODO: Consider return a `Uri`` instead.
-    fn get_destination_uri_from_request(&self, request: &Request) -> Option<Uri> {
+    fn get_destination_uri_from_request(&self, request: &Request) -> Destination {
         let req_uri = request.uri();
 
         // First, attempt to match a domain.
@@ -116,10 +127,17 @@ impl RoutingTable {
                 Authority::from_str(&pc.host_addr().to_string())
                     .expect("SocketAddr should never fail to convert to Authority"),
             );
-            return Some(Uri::from_parts(parts).expect("should not have invalidated Uri"));
+            return Destination::ReverseProxied(
+                Uri::from_parts(parts).expect("should not have invalidated Uri"),
+            );
         }
 
         // Matching a domain did not succeed, let's try with a path.
+        // First, we attempt to match a special `_rockslide` path:
+        if req_uri.path().starts_with("/_rockslide") {
+            return Destination::Internal(req_uri.to_owned());
+        }
+
         // Reconstruct image location from path segments, keeping remainder intact.
         if let Some((image_location, remainder)) = split_path_base_url(req_uri) {
             if let Some(pc) = self.get_path_route(&image_location) {
@@ -141,17 +159,18 @@ impl RoutingTable {
                 parts.authority = Some(Authority::from_str(&container_addr.to_string()).unwrap());
                 parts.path_and_query = Some(PathAndQuery::from_str(&dest_path_and_query).unwrap());
 
-                return Some(Uri::from_parts(parts).unwrap());
+                return Destination::ReverseProxied(Uri::from_parts(parts).unwrap());
             }
         }
 
-        None
+        Destination::NotFound
     }
 }
 
 #[derive(Debug)]
 enum AppError {
     NoSuchContainer,
+    InternalUrlInvalid,
     AssertionFailed(&'static str),
     NonUtf8Header,
     Internal(anyhow::Error),
@@ -162,6 +181,7 @@ impl Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AppError::NoSuchContainer => f.write_str("no such container"),
+            AppError::InternalUrlInvalid => f.write_str("internal url invalid"),
             AppError::AssertionFailed(msg) => f.write_str(msg),
             AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
             AppError::Internal(err) => Display::fmt(err, f),
@@ -184,6 +204,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
             AppError::NoSuchContainer => StatusCode::NOT_FOUND.into_response(),
+            AppError::InternalUrlInvalid => StatusCode::NOT_FOUND.into_response(),
             AppError::AssertionFailed(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AppError::NonUtf8Header => StatusCode::BAD_REQUEST.into_response(),
             AppError::Internal(err) => {
@@ -198,6 +219,7 @@ impl ReverseProxy {
         Arc::new(ReverseProxy {
             client: reqwest::Client::new(),
             routing_table: RwLock::new(Default::default()),
+            orchestrator: OnceLock::new(),
         })
     }
 
@@ -213,6 +235,13 @@ impl ReverseProxy {
 
         let mut guard = self.routing_table.write().await;
         mem::swap(&mut *guard, &mut routing_table);
+    }
+
+    pub(crate) fn set_orchestrator(&self, orchestrator: Arc<ContainerOrchestrator>) -> &Self {
+        self.orchestrator
+            .set(orchestrator)
+            .expect("set already set orchestrator");
+        self
     }
 }
 
@@ -239,7 +268,52 @@ async fn route_request(
         routing_table.get_destination_uri_from_request(&request)
     };
 
-    let dest = dest_uri.ok_or(AppError::NoSuchContainer)?;
+    let dest = match dest_uri {
+        Destination::ReverseProxied(dest) => dest,
+        Destination::Internal(uri) => {
+            let remainder = uri
+                .path()
+                .strip_prefix("/_rockslide/config/")
+                .ok_or(AppError::InternalUrlInvalid)?;
+
+            let parts = remainder.split('/').collect::<Vec<_>>();
+            if parts.len() != 3 {
+                return Err(AppError::InternalUrlInvalid);
+            }
+
+            if parts[2] != "prod" {
+                return Err(AppError::InternalUrlInvalid);
+            }
+
+            let manifest_reference = ManifestReference::new(
+                ImageLocation::new(parts[0].to_owned(), parts[1].to_owned()),
+                Reference::new_tag(parts[2]),
+            );
+
+            // TODO: Match GET/POST.
+            let orchestrator = rp
+                .orchestrator
+                .get()
+                .ok_or_else(|| AppError::AssertionFailed("no orchestrator configured"))?;
+
+            // GET:
+            let config = orchestrator
+                .load_config(&manifest_reference)
+                .await
+                .map_err(AppError::Internal)?;
+            let config_toml =
+                toml::to_string_pretty(&config).map_err(|err| AppError::Internal(err.into()))?;
+
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "application/toml")
+                .body(Body::from(config_toml))
+                .map_err(|_| AppError::AssertionFailed("should not fail to build response"));
+        }
+        Destination::NotFound => {
+            return Err(AppError::NoSuchContainer);
+        }
+    };
     trace!(%dest, "reverse proxying");
 
     // Note: `reqwest` and `axum` currently use different versions of `http`

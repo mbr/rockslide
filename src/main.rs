@@ -7,6 +7,7 @@ mod reverse_proxy;
 use std::{
     env, fs,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
+    sync::Arc,
 };
 
 use anyhow::Context;
@@ -83,13 +84,15 @@ async fn main() -> anyhow::Result<()> {
         "rockslide-podman".to_owned(),
         cfg.rockslide.master_key.as_secret_string(),
     );
-    let orchestrator = ContainerOrchestrator::new(
+    let orchestrator = Arc::new(ContainerOrchestrator::new(
         &cfg.containers.podman_path,
         reverse_proxy.clone(),
         local_addr,
         credentials,
         &cfg.registry.storage_path,
-    )?;
+    )?);
+    reverse_proxy.set_orchestrator(orchestrator.clone());
+
     // TODO: Probably should not fail if synchronization fails.
     orchestrator.synchronize_all().await?;
     orchestrator.updated_published_set().await;
