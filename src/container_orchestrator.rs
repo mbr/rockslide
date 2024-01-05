@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::fs;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
@@ -10,6 +12,7 @@ use crate::{
     reverse_proxy::ReverseProxy,
 };
 
+use anyhow::Context;
 use axum::async_trait;
 use sec::Secret;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -32,6 +35,7 @@ pub(crate) struct ContainerOrchestrator {
     reverse_proxy: Arc<ReverseProxy>,
     local_addr: SocketAddr,
     registry_credentials: (String, Secret<String>),
+    configs_dir: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -58,19 +62,58 @@ pub(crate) struct RuntimeConfig {
 }
 
 impl ContainerOrchestrator {
-    pub(crate) fn new<P: AsRef<Path>>(
+    pub(crate) fn new<P: AsRef<Path>, Q: AsRef<Path>>(
         podman_path: P,
         reverse_proxy: Arc<ReverseProxy>,
         local_addr: SocketAddr,
         registry_credentials: (String, Secret<String>),
-    ) -> Self {
+        runtime_dir: Q,
+    ) -> anyhow::Result<Self> {
         let podman = Podman::new(podman_path, podman_is_remote());
-        Self {
+
+        let configs_dir = runtime_dir
+            .as_ref()
+            .canonicalize()
+            .context("could not canonicalize runtime config dir")?
+            .join("configs");
+
+        if !configs_dir.exists() {
+            fs::create_dir(&configs_dir).context("could not create config dir")?;
+        }
+
+        Ok(Self {
             podman,
             reverse_proxy,
             local_addr,
             registry_credentials,
+            configs_dir,
+        })
+    }
+
+    fn config_path(&self, manifest_reference: &ManifestReference) -> PathBuf {
+        let location = manifest_reference.location();
+
+        self.configs_dir
+            .join(location.repository())
+            .join(location.image())
+            .join(manifest_reference.reference().to_string())
+    }
+
+    pub(crate) async fn load_config(
+        &self,
+        manifest_reference: &ManifestReference,
+    ) -> anyhow::Result<RuntimeConfig> {
+        let config_path = self.config_path(manifest_reference);
+
+        if !config_path.exists() {
+            return Ok(Default::default());
         }
+
+        let raw = tokio::fs::read_to_string(config_path)
+            .await
+            .context("could not read config")?;
+
+        toml::from_str(&raw).context("could not parse configuration")
     }
 
     async fn fetch_managed_containers(&self, all: bool) -> anyhow::Result<Vec<PublishedContainer>> {
@@ -81,10 +124,41 @@ impl ContainerOrchestrator {
 
         debug!(?all_containers, "fetched containers");
 
-        Ok(all_containers
-            .iter()
-            .filter_map(ContainerJson::published_container)
-            .collect())
+        let mut rv = Vec::new();
+        for container in all_containers {
+            // TODO: Just log error instead of returning.
+            if let Some(pc) = self.load_managed_container(container).await? {
+                rv.push(pc);
+            }
+        }
+        Ok(rv)
+    }
+
+    async fn load_managed_container(
+        &self,
+        container_json: ContainerJson,
+    ) -> anyhow::Result<Option<PublishedContainer>> {
+        let manifest_reference = if let Some(val) = container_json.manifest_reference() {
+            val
+        } else {
+            return Ok(None);
+        };
+
+        let port_mapping = if let Some(val) = container_json.active_published_port() {
+            val
+        } else {
+            return Ok(None);
+        };
+
+        let config = self.load_config(&manifest_reference).await?;
+
+        Ok(Some(PublishedContainer {
+            host_addr: port_mapping
+                .get_host_listening_addr()
+                .context("could not get host listening address")?,
+            manifest_reference,
+            config,
+        }))
     }
 
     pub(crate) async fn updated_published_set(&self) {
@@ -212,17 +286,6 @@ impl ContainerJson {
 
     fn active_published_port(&self) -> Option<&PortMapping> {
         self.ports.get(0)
-    }
-
-    fn published_container(&self) -> Option<PublishedContainer> {
-        let manifest_reference = self.manifest_reference()?;
-        let port_mapping = self.active_published_port()?;
-
-        Some(PublishedContainer {
-            host_addr: port_mapping.get_host_listening_addr()?,
-            manifest_reference,
-            config: Default::default(), // TODO
-        })
     }
 }
 

@@ -150,6 +150,15 @@ impl Reference {
     }
 }
 
+impl Display for Reference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reference::Tag(tag) => Display::fmt(tag, f),
+            Reference::Digest(digest) => Display::fmt(digest, f),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("given upload does not exist")]

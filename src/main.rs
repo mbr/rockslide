@@ -73,6 +73,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let local_addr = SocketAddr::from((local_ip, cfg.reverse_proxy.http_bind.port()));
+    // TODO: Fix (see #34).
+    let local_addr = SocketAddr::from(([127, 0, 0, 1], cfg.reverse_proxy.http_bind.port()));
     info!(%local_addr, "guessing local registry address");
 
     let reverse_proxy = ReverseProxy::new();
@@ -86,7 +88,8 @@ async fn main() -> anyhow::Result<()> {
         reverse_proxy.clone(),
         local_addr,
         credentials,
-    );
+        &cfg.registry.storage_path,
+    )?;
     // TODO: Probably should not fail if synchronization fails.
     orchestrator.synchronize_all().await?;
     orchestrator.updated_published_set().await;
