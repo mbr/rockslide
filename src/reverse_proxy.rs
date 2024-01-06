@@ -2,9 +2,8 @@ use std::{
     collections::HashMap,
     fmt::{self, Display},
     mem,
-    net::SocketAddr,
     str::{self, FromStr},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use axum::{
@@ -13,26 +12,27 @@ use axum::{
     http::{
         header::HOST,
         uri::{Authority, Parts, PathAndQuery, Scheme},
-        StatusCode, Uri,
+        Method, StatusCode, Uri,
     },
     response::{IntoResponse, Response},
-    Router,
+    RequestExt, Router,
 };
 use itertools::Itertools;
 use tokio::sync::RwLock;
 use tracing::{trace, warn};
 
-use crate::registry::storage::ImageLocation;
+use crate::{
+    container_orchestrator::{ContainerOrchestrator, PublishedContainer, RuntimeConfig},
+    registry::{
+        storage::ImageLocation, AuthProvider, ManifestReference, Reference, UnverifiedCredentials,
+    },
+};
 
 pub(crate) struct ReverseProxy {
+    auth_provider: Arc<dyn AuthProvider>,
     client: reqwest::Client,
     routing_table: RwLock<RoutingTable>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PublishedContainer {
-    host_addr: SocketAddr,
-    image_location: ImageLocation,
+    orchestrator: OnceLock<Arc<ContainerOrchestrator>>,
 }
 
 #[derive(Debug, Default)]
@@ -73,17 +73,29 @@ impl PartialEq<String> for Domain {
     }
 }
 
+#[derive(Debug)]
+enum Destination {
+    ReverseProxied {
+        uri: Uri,
+        config: Arc<RuntimeConfig>,
+    },
+    Internal(Uri),
+    NotFound,
+}
+
 impl RoutingTable {
     fn from_containers(containers: impl IntoIterator<Item = PublishedContainer>) -> Self {
         let mut path_maps = HashMap::new();
         let mut domain_maps = HashMap::new();
 
         for container in containers {
-            if let Some(domain) = Domain::new(&container.image_location.repository()) {
+            if let Some(domain) =
+                Domain::new(container.manifest_reference().location().repository())
+            {
                 domain_maps.insert(domain, container.clone());
             }
 
-            path_maps.insert(container.image_location.clone(), container);
+            path_maps.insert(container.manifest_reference().location().clone(), container);
         }
 
         Self {
@@ -92,8 +104,7 @@ impl RoutingTable {
         }
     }
 
-    // TODO: Consider return a `Uri`` instead.
-    fn get_destination_uri_from_request(&self, request: &Request) -> Option<Uri> {
+    fn get_destination_uri_from_request(&self, request: &Request) -> Destination {
         let req_uri = request.uri();
 
         // First, attempt to match a domain.
@@ -118,17 +129,25 @@ impl RoutingTable {
             let mut parts = req_uri.clone().into_parts();
             parts.scheme = Some(Scheme::HTTP);
             parts.authority = Some(
-                Authority::from_str(&pc.host_addr.to_string())
+                Authority::from_str(&pc.host_addr().to_string())
                     .expect("SocketAddr should never fail to convert to Authority"),
             );
-            return Some(Uri::from_parts(parts).expect("should not have invalidated Uri"));
+            return Destination::ReverseProxied {
+                uri: Uri::from_parts(parts).expect("should not have invalidated Uri"),
+                config: pc.config().clone(),
+            };
         }
 
         // Matching a domain did not succeed, let's try with a path.
+        // First, we attempt to match a special `_rockslide` path:
+        if req_uri.path().starts_with("/_rockslide") {
+            return Destination::Internal(req_uri.to_owned());
+        }
+
         // Reconstruct image location from path segments, keeping remainder intact.
         if let Some((image_location, remainder)) = split_path_base_url(req_uri) {
             if let Some(pc) = self.get_path_route(&image_location) {
-                let container_addr = pc.host_addr;
+                let container_addr = pc.host_addr();
 
                 let mut dest_path_and_query = remainder;
 
@@ -146,19 +165,28 @@ impl RoutingTable {
                 parts.authority = Some(Authority::from_str(&container_addr.to_string()).unwrap());
                 parts.path_and_query = Some(PathAndQuery::from_str(&dest_path_and_query).unwrap());
 
-                return Some(Uri::from_parts(parts).unwrap());
+                return Destination::ReverseProxied {
+                    uri: Uri::from_parts(parts).unwrap(),
+                    config: pc.config().clone(),
+                };
             }
         }
 
-        None
+        Destination::NotFound
     }
 }
 
 #[derive(Debug)]
 enum AppError {
     NoSuchContainer,
+    InternalUrlInvalid,
     AssertionFailed(&'static str),
     NonUtf8Header,
+    AuthFailure {
+        realm: &'static str,
+        status: StatusCode,
+    },
+    InvalidPayload,
     Internal(anyhow::Error),
 }
 
@@ -167,8 +195,11 @@ impl Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AppError::NoSuchContainer => f.write_str("no such container"),
+            AppError::InternalUrlInvalid => f.write_str("internal url invalid"),
             AppError::AssertionFailed(msg) => f.write_str(msg),
             AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
+            AppError::AuthFailure { .. } => f.write_str("authentication missing or not present"),
+            AppError::InvalidPayload => f.write_str("invalid payload"),
             AppError::Internal(err) => Display::fmt(err, f),
         }
     }
@@ -189,8 +220,15 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
             AppError::NoSuchContainer => StatusCode::NOT_FOUND.into_response(),
+            AppError::InternalUrlInvalid => StatusCode::NOT_FOUND.into_response(),
             AppError::AssertionFailed(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AppError::NonUtf8Header => StatusCode::BAD_REQUEST.into_response(),
+            AppError::AuthFailure { realm, status } => Response::builder()
+                .status(status)
+                .header("WWW-Authenticate", format!("basic realm={realm}"))
+                .body(Body::empty())
+                .expect("should never fail to build auth failure response"),
+            AppError::InvalidPayload => StatusCode::BAD_REQUEST.into_response(),
             AppError::Internal(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
@@ -198,20 +236,13 @@ impl IntoResponse for AppError {
     }
 }
 
-impl PublishedContainer {
-    pub(crate) fn new(host_addr: SocketAddr, image_location: ImageLocation) -> Self {
-        Self {
-            host_addr,
-            image_location,
-        }
-    }
-}
-
 impl ReverseProxy {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new(auth_provider: Arc<dyn AuthProvider>) -> Arc<Self> {
         Arc::new(ReverseProxy {
+            auth_provider,
             client: reqwest::Client::new(),
             routing_table: RwLock::new(Default::default()),
+            orchestrator: OnceLock::new(),
         })
     }
 
@@ -227,6 +258,14 @@ impl ReverseProxy {
 
         let mut guard = self.routing_table.write().await;
         mem::swap(&mut *guard, &mut routing_table);
+    }
+
+    pub(crate) fn set_orchestrator(&self, orchestrator: Arc<ContainerOrchestrator>) -> &Self {
+        self.orchestrator
+            .set(orchestrator)
+            .map_err(|_| ())
+            .expect("set already set orchestrator");
+        self
     }
 }
 
@@ -246,56 +285,154 @@ fn split_path_base_url(uri: &Uri) -> Option<(ImageLocation, String)> {
 
 async fn route_request(
     State(rp): State<Arc<ReverseProxy>>,
-    request: Request,
+    mut request: Request,
 ) -> Result<Response, AppError> {
     let dest_uri = {
         let routing_table = rp.routing_table.read().await;
         routing_table.get_destination_uri_from_request(&request)
     };
 
-    let dest = dest_uri.ok_or(AppError::NoSuchContainer)?;
-    trace!(%dest, "reverse proxying");
+    match dest_uri {
+        Destination::ReverseProxied { uri: dest, config } => {
+            trace!(%dest, "reverse proxying");
 
-    // Note: `reqwest` and `axum` currently use different versions of `http`
-    let method =
-        request.method().to_string().parse().map_err(|_| {
-            AppError::AssertionFailed("method http version mismatch workaround failed")
-        })?;
-    let response = rp.client.request(method, dest.to_string()).send().await;
+            // First, check if http authentication is enabled.
+            if let Some(ref http_access) = config.http.access {
+                let creds = request
+                    .extract_parts::<UnverifiedCredentials>()
+                    .await
+                    .map_err(|status| AppError::AuthFailure {
+                        // TODO: Output container name?
+                        realm: "password protected container",
+                        status,
+                    })?;
 
-    match response {
-        Ok(response) => {
-            let mut bld = Response::builder().status(response.status().as_u16());
-            for (key, value) in response.headers() {
-                if HOP_BY_HOP.contains(key) {
-                    continue;
+                if !http_access.check_credentials(&creds).await {
+                    return Err(AppError::AuthFailure {
+                        realm: "password protected container",
+                        status: StatusCode::UNAUTHORIZED,
+                    });
                 }
-
-                let key_string = key.to_string();
-                let value_str = value.to_str().map_err(|_| AppError::NonUtf8Header)?;
-
-                bld = bld.header(key_string, value_str);
             }
-            Ok(bld
-                .body(Body::from(response.bytes().await?))
-                .map_err(|_| AppError::AssertionFailed("should not fail to construct response"))?)
+
+            // Note: `reqwest` and `axum` currently use different versions of `http`
+            let method = request.method().to_string().parse().map_err(|_| {
+                AppError::AssertionFailed("method http version mismatch workaround failed")
+            })?;
+            let response = rp.client.request(method, dest.to_string()).send().await;
+
+            match response {
+                Ok(response) => {
+                    let mut bld = Response::builder().status(response.status().as_u16());
+                    for (key, value) in response.headers() {
+                        if HOP_BY_HOP.contains(key) {
+                            continue;
+                        }
+
+                        let key_string = key.to_string();
+                        let value_str = value.to_str().map_err(|_| AppError::NonUtf8Header)?;
+
+                        bld = bld.header(key_string, value_str);
+                    }
+                    Ok(bld.body(Body::from(response.bytes().await?)).map_err(|_| {
+                        AppError::AssertionFailed("should not fail to construct response")
+                    })?)
+                }
+                Err(err) => {
+                    warn!(%err, %dest, "failed request");
+                    Ok(Response::builder()
+                        .status(500)
+                        .body(Body::empty())
+                        .map_err(|_| {
+                            AppError::AssertionFailed("should not fail to construct error response")
+                        })?)
+                }
+            }
         }
-        Err(err) => {
-            warn!(%err, %dest, "failed request");
-            Ok(Response::builder()
-                .status(500)
-                .body(Body::empty())
-                .map_err(|_| {
-                    AppError::AssertionFailed("should not fail to construct error response")
-                })?)
+        Destination::Internal(uri) => {
+            let method = request.method().clone();
+            // Note: The auth functionality has been lifted from `registry`. It may need to be
+            //       refactored out because of that.
+            let creds: UnverifiedCredentials =
+                request
+                    .extract_parts()
+                    .await
+                    .map_err(|status| AppError::AuthFailure {
+                        realm: "internal",
+                        status,
+                    })?;
+
+            let opt_body = request
+                .extract::<Option<String>, _>()
+                .await
+                .expect("infallible");
+
+            // Any internal URL is subject to requiring auth through the master key.
+            if !rp.auth_provider.check_credentials(&creds).await {
+                return Err(AppError::AuthFailure {
+                    realm: "internal",
+                    status: StatusCode::UNAUTHORIZED,
+                });
+            }
+
+            let remainder = uri
+                .path()
+                .strip_prefix("/_rockslide/config/")
+                .ok_or(AppError::InternalUrlInvalid)?;
+
+            let parts = remainder.split('/').collect::<Vec<_>>();
+            if parts.len() != 3 {
+                return Err(AppError::InternalUrlInvalid);
+            }
+
+            if parts[2] != "prod" {
+                return Err(AppError::InternalUrlInvalid);
+            }
+
+            let manifest_reference = ManifestReference::new(
+                ImageLocation::new(parts[0].to_owned(), parts[1].to_owned()),
+                Reference::new_tag(parts[2]),
+            );
+
+            let orchestrator = rp
+                .orchestrator
+                .get()
+                .ok_or_else(|| AppError::AssertionFailed("no orchestrator configured"))?;
+
+            match method {
+                Method::GET => {
+                    let config = orchestrator
+                        .load_config(&manifest_reference)
+                        .await
+                        .map_err(AppError::Internal)?;
+
+                    Ok(config.into_response())
+                }
+                Method::PUT => {
+                    let raw = opt_body.ok_or(AppError::InvalidPayload)?;
+                    let new_config: RuntimeConfig =
+                        toml::from_str(&raw).map_err(|_| AppError::InvalidPayload)?;
+                    let stored = orchestrator
+                        .save_config(&manifest_reference, &new_config)
+                        .await
+                        .map_err(AppError::Internal)?;
+
+                    // Update containers.
+                    orchestrator.updated_published_set().await;
+
+                    Ok(stored.into_response())
+                }
+                _ => Err(AppError::InternalUrlInvalid),
+            }
         }
+        Destination::NotFound => Err(AppError::NoSuchContainer),
     }
 }
 
 /// HTTP/1.1 hop-by-hop headers
 mod hop_by_hop {
     use reqwest::header::HeaderName;
-    pub(super) const HOP_BY_HOP: [HeaderName; 8] = [
+    pub(super) static HOP_BY_HOP: [HeaderName; 8] = [
         HeaderName::from_static("keep-alive"),
         HeaderName::from_static("transfer-encoding"),
         HeaderName::from_static("te"),

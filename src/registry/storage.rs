@@ -55,7 +55,7 @@ pub(crate) struct ImageLocation {
     image: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ManifestReference {
     #[serde(flatten)]
     location: ImageLocation,
@@ -97,7 +97,7 @@ impl ImageLocation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Reference {
     Tag(String),
     Digest(Digest),
@@ -146,6 +146,15 @@ impl Reference {
         match self {
             Reference::Tag(tag) => Some(tag),
             Reference::Digest(_) => None,
+        }
+    }
+}
+
+impl Display for Reference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reference::Tag(tag) => Display::fmt(tag, f),
+            Reference::Digest(digest) => Display::fmt(digest, f),
         }
     }
 }

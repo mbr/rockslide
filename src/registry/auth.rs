@@ -1,4 +1,4 @@
-use std::{str, sync::Arc};
+use std::{collections::HashMap, str, sync::Arc};
 
 use axum::{
     async_trait,
@@ -93,6 +93,30 @@ impl AuthProvider for bool {
 
     async fn has_access_to(&self, _username: &str, _namespace: &str, _image: &str) -> bool {
         *self
+    }
+}
+
+#[async_trait]
+impl AuthProvider for HashMap<String, Secret<String>> {
+    async fn check_credentials(
+        &self,
+        UnverifiedCredentials {
+            username: unverified_username,
+            password: unverified_password,
+        }: &UnverifiedCredentials,
+    ) -> bool {
+        if let Some(correct_password) = self.get(unverified_username) {
+            // TODO: Use constant-time compare. Maybe add to `sec`?
+            if correct_password == unverified_password {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    async fn has_access_to(&self, _username: &str, _namespace: &str, _image: &str) -> bool {
+        true
     }
 }
 

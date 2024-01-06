@@ -6,7 +6,7 @@ use sec::Secret;
 use serde::Deserialize;
 
 use crate::{
-    podman_is_remote,
+    podman::podman_is_remote,
     registry::{AuthProvider, UnverifiedCredentials},
 };
 
