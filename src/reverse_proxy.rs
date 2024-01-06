@@ -10,7 +10,7 @@ use axum::{
     body::Body,
     extract::{Request, State},
     http::{
-        header::{CONTENT_TYPE, HOST},
+        header::HOST,
         uri::{Authority, Parts, PathAndQuery, Scheme},
         Method, StatusCode, Uri,
     },
@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 use tracing::{trace, warn};
 
 use crate::{
-    container_orchestrator::{ContainerOrchestrator, PublishedContainer},
+    container_orchestrator::{ContainerOrchestrator, PublishedContainer, RuntimeConfig},
     registry::{
         storage::ImageLocation, AuthProvider, ManifestReference, Reference, UnverifiedCredentials,
     },
@@ -176,6 +176,7 @@ enum AppError {
     AssertionFailed(&'static str),
     NonUtf8Header,
     AuthFailure(StatusCode),
+    InvalidPayload,
     Internal(anyhow::Error),
 }
 
@@ -188,6 +189,7 @@ impl Display for AppError {
             AppError::AssertionFailed(msg) => f.write_str(msg),
             AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
             AppError::AuthFailure(_) => f.write_str("authentication missing or not present"),
+            AppError::InvalidPayload => f.write_str("invalid payload"),
             AppError::Internal(err) => Display::fmt(err, f),
         }
     }
@@ -212,6 +214,7 @@ impl IntoResponse for AppError {
             AppError::AssertionFailed(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AppError::NonUtf8Header => StatusCode::BAD_REQUEST.into_response(),
             AppError::AuthFailure(status) => status.into_response(),
+            AppError::InvalidPayload => StatusCode::BAD_REQUEST.into_response(),
             AppError::Internal(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
@@ -281,10 +284,10 @@ async fn route_request(
             let method = request.method().clone();
             // Note: The auth functionality has been lifted from `registry`. It may need to be
             //       refactored out because of that.
-            let creds = request
-                .extract::<UnverifiedCredentials, _>()
+            let (creds, opt_body) = request
+                .extract::<(UnverifiedCredentials, Option<String>), _>()
                 .await
-                .map_err(AppError::AuthFailure)?;
+                .map_err(|_| AppError::AuthFailure(StatusCode::UNAUTHORIZED))?;
 
             // Any internal URL is subject to requiring auth through the master key.
             if !rp.auth_provider.check_credentials(&creds).await {
@@ -324,22 +327,19 @@ async fn route_request(
                         .load_config(&manifest_reference)
                         .await
                         .map_err(AppError::Internal)?;
-                    let config_toml = toml::to_string_pretty(&config)
-                        .map_err(|err| AppError::Internal(err.into()))?;
 
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header(CONTENT_TYPE, "application/toml")
-                        .body(Body::from(config_toml))
-                        .map_err(|_| AppError::AssertionFailed("should not fail to build response"))
+                    Ok(config.into_response())
                 }
                 Method::PUT => {
-                    todo!("handle PUT");
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        // .header(CONTENT_TYPE, "application/toml")
-                        .body(Body::from("TODO: Replace"))
-                        .map_err(|_| AppError::AssertionFailed("should not fail to build response"))
+                    let raw = dbg!(opt_body.ok_or(AppError::InvalidPayload)?);
+                    let new_config: RuntimeConfig =
+                        toml::from_str(&raw).map_err(|_| AppError::InvalidPayload)?;
+                    let stored = orchestrator
+                        .save_config(&manifest_reference, &new_config)
+                        .await
+                        .map_err(AppError::Internal)?;
+
+                    Ok(stored.into_response())
                 }
                 _ => Err(AppError::InternalUrlInvalid),
             };

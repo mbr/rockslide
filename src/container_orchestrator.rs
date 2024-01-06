@@ -14,6 +14,10 @@ use crate::{
 
 use anyhow::Context;
 use axum::async_trait;
+use axum::body::Body;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use sec::Secret;
 use serde::{Deserialize, Deserializer, Serialize};
 use tracing::{debug, error, info};
@@ -59,6 +63,21 @@ impl PublishedContainer {
 pub(crate) struct RuntimeConfig {
     #[serde(default)]
     http_access: HashMap<String, String>,
+}
+
+impl IntoResponse for RuntimeConfig {
+    fn into_response(self) -> axum::response::Response {
+        toml::to_string_pretty(&self)
+            .ok()
+            .and_then(|config_toml| {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "application/toml")
+                    .body(Body::from(config_toml))
+                    .ok()
+            })
+            .unwrap_or_else(|| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    }
 }
 
 impl ContainerOrchestrator {
@@ -114,6 +133,33 @@ impl ContainerOrchestrator {
             .context("could not read config")?;
 
         toml::from_str(&raw).context("could not parse configuration")
+    }
+
+    pub(crate) async fn save_config(
+        &self,
+        manifest_reference: &ManifestReference,
+        config: &RuntimeConfig,
+    ) -> anyhow::Result<RuntimeConfig> {
+        let config_path = self.config_path(manifest_reference);
+        let parent_dir = config_path
+            .parent()
+            .context("could not determine parent path")?;
+
+        if !parent_dir.exists() {
+            tokio::fs::create_dir_all(parent_dir)
+                .await
+                .context("could not create parent path")?;
+        }
+
+        let toml = toml::to_string_pretty(config).context("could not serialize new config")?;
+
+        // TODO: Do atomic replace.
+        tokio::fs::write(config_path, toml)
+            .await
+            .context("failed to write new toml config")?;
+
+        // Read back to verify.
+        self.load_config(manifest_reference).await
     }
 
     async fn fetch_managed_containers(&self, all: bool) -> anyhow::Result<Vec<PublishedContainer>> {
