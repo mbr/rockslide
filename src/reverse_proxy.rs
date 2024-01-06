@@ -399,6 +399,9 @@ async fn route_request(
                         .await
                         .map_err(AppError::Internal)?;
 
+                    // Update containers.
+                    orchestrator.updated_published_set().await;
+
                     Ok(stored.into_response())
                 }
                 _ => Err(AppError::InternalUrlInvalid),
