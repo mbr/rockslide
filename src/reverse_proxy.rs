@@ -288,7 +288,10 @@ async fn route_request(
 
             // Any internal URL is subject to requiring auth through the master key.
             if !rp.auth_provider.check_credentials(&creds).await {
-                todo!("return 403");
+                return Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body(Body::empty())
+                    .map_err(|_| AppError::AssertionFailed("should not fail to build response"));
             }
 
             let remainder = uri
