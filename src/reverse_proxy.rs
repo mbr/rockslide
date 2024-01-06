@@ -75,7 +75,10 @@ impl PartialEq<String> for Domain {
 
 #[derive(Debug)]
 enum Destination {
-    ReverseProxied(Uri),
+    ReverseProxied {
+        uri: Uri,
+        config: Arc<RuntimeConfig>,
+    },
     Internal(Uri),
     NotFound,
 }
@@ -129,9 +132,10 @@ impl RoutingTable {
                 Authority::from_str(&pc.host_addr().to_string())
                     .expect("SocketAddr should never fail to convert to Authority"),
             );
-            return Destination::ReverseProxied(
-                Uri::from_parts(parts).expect("should not have invalidated Uri"),
-            );
+            return Destination::ReverseProxied {
+                uri: Uri::from_parts(parts).expect("should not have invalidated Uri"),
+                config: pc.config().clone(),
+            };
         }
 
         // Matching a domain did not succeed, let's try with a path.
@@ -161,7 +165,10 @@ impl RoutingTable {
                 parts.authority = Some(Authority::from_str(&container_addr.to_string()).unwrap());
                 parts.path_and_query = Some(PathAndQuery::from_str(&dest_path_and_query).unwrap());
 
-                return Destination::ReverseProxied(Uri::from_parts(parts).unwrap());
+                return Destination::ReverseProxied {
+                    uri: Uri::from_parts(parts).unwrap(),
+                    config: pc.config().clone(),
+                };
             }
         }
 
@@ -271,7 +278,7 @@ fn split_path_base_url(uri: &Uri) -> Option<(ImageLocation, String)> {
 
 async fn route_request(
     State(rp): State<Arc<ReverseProxy>>,
-    request: Request,
+    mut request: Request,
 ) -> Result<Response, AppError> {
     let dest_uri = {
         let routing_table = rp.routing_table.read().await;
@@ -279,8 +286,25 @@ async fn route_request(
     };
 
     match dest_uri {
-        Destination::ReverseProxied(dest) => {
+        Destination::ReverseProxied { uri: dest, config } => {
             trace!(%dest, "reverse proxying");
+
+            // First, check if http authentication is enabled.
+            if let Some(ref http_access) = config.http_access {
+                let creds = request
+                    .extract_parts::<UnverifiedCredentials>()
+                    .await
+                    .map_err(AppError::AuthFailure)?;
+
+                if !http_access.check_credentials(&creds).await {
+                    return Response::builder()
+                        .status(StatusCode::FORBIDDEN)
+                        .body(Body::empty())
+                        .map_err(|_| {
+                            AppError::AssertionFailed("should not fail to build response")
+                        });
+                }
+            }
 
             // Note: `reqwest` and `axum` currently use different versions of `http`
             let method = request.method().to_string().parse().map_err(|_| {
@@ -367,7 +391,7 @@ async fn route_request(
                     Ok(config.into_response())
                 }
                 Method::PUT => {
-                    let raw = dbg!(opt_body.ok_or(AppError::InvalidPayload)?);
+                    let raw = opt_body.ok_or(AppError::InvalidPayload)?;
                     let new_config: RuntimeConfig =
                         toml::from_str(&raw).map_err(|_| AppError::InvalidPayload)?;
                     let stored = orchestrator

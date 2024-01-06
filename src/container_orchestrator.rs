@@ -46,7 +46,7 @@ pub(crate) struct ContainerOrchestrator {
 pub(crate) struct PublishedContainer {
     host_addr: SocketAddr,
     manifest_reference: ManifestReference,
-    config: RuntimeConfig,
+    config: Arc<RuntimeConfig>,
 }
 
 impl PublishedContainer {
@@ -57,12 +57,16 @@ impl PublishedContainer {
     pub(crate) fn host_addr(&self) -> SocketAddr {
         self.host_addr
     }
+
+    pub(crate) fn config(&self) -> &Arc<RuntimeConfig> {
+        &self.config
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct RuntimeConfig {
     #[serde(default)]
-    http_access: HashMap<String, String>,
+    pub(crate) http_access: Option<HashMap<String, Secret<String>>>,
 }
 
 impl IntoResponse for RuntimeConfig {
@@ -115,7 +119,12 @@ impl ContainerOrchestrator {
         self.configs_dir
             .join(location.repository())
             .join(location.image())
-            .join(manifest_reference.reference().to_string())
+            .join(
+                manifest_reference
+                    .reference()
+                    .to_string()
+                    .trim_start_matches(':'),
+            )
     }
 
     pub(crate) async fn load_config(
@@ -196,7 +205,7 @@ impl ContainerOrchestrator {
             return Ok(None);
         };
 
-        let config = self.load_config(&manifest_reference).await?;
+        let config = Arc::new(self.load_config(&manifest_reference).await?);
 
         Ok(Some(PublishedContainer {
             host_addr: port_mapping
