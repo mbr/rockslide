@@ -182,7 +182,10 @@ enum AppError {
     InternalUrlInvalid,
     AssertionFailed(&'static str),
     NonUtf8Header,
-    AuthFailure(StatusCode),
+    AuthFailure {
+        realm: &'static str,
+        status: StatusCode,
+    },
     InvalidPayload,
     Internal(anyhow::Error),
 }
@@ -195,7 +198,7 @@ impl Display for AppError {
             AppError::InternalUrlInvalid => f.write_str("internal url invalid"),
             AppError::AssertionFailed(msg) => f.write_str(msg),
             AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
-            AppError::AuthFailure(_) => f.write_str("authentication missing or not present"),
+            AppError::AuthFailure { .. } => f.write_str("authentication missing or not present"),
             AppError::InvalidPayload => f.write_str("invalid payload"),
             AppError::Internal(err) => Display::fmt(err, f),
         }
@@ -220,7 +223,11 @@ impl IntoResponse for AppError {
             AppError::InternalUrlInvalid => StatusCode::NOT_FOUND.into_response(),
             AppError::AssertionFailed(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AppError::NonUtf8Header => StatusCode::BAD_REQUEST.into_response(),
-            AppError::AuthFailure(status) => status.into_response(),
+            AppError::AuthFailure { realm, status } => Response::builder()
+                .status(status)
+                .header("WWW-Authenticate", format!("basic realm={realm}"))
+                .body(Body::empty())
+                .expect("should never fail to build auth failure response"),
             AppError::InvalidPayload => StatusCode::BAD_REQUEST.into_response(),
             AppError::Internal(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
@@ -294,15 +301,17 @@ async fn route_request(
                 let creds = request
                     .extract_parts::<UnverifiedCredentials>()
                     .await
-                    .map_err(AppError::AuthFailure)?;
+                    .map_err(|status| AppError::AuthFailure {
+                        // TODO: Output container name?
+                        realm: "password protected container",
+                        status,
+                    })?;
 
                 if !http_access.check_credentials(&creds).await {
-                    return Response::builder()
-                        .status(StatusCode::FORBIDDEN)
-                        .body(Body::empty())
-                        .map_err(|_| {
-                            AppError::AssertionFailed("should not fail to build response")
-                        });
+                    return Err(AppError::AuthFailure {
+                        realm: "password protected container",
+                        status: StatusCode::FORBIDDEN,
+                    });
                 }
             }
 
@@ -344,17 +353,26 @@ async fn route_request(
             let method = request.method().clone();
             // Note: The auth functionality has been lifted from `registry`. It may need to be
             //       refactored out because of that.
-            let (creds, opt_body) = request
-                .extract::<(UnverifiedCredentials, Option<String>), _>()
+            let creds: UnverifiedCredentials =
+                request
+                    .extract_parts()
+                    .await
+                    .map_err(|status| AppError::AuthFailure {
+                        realm: "internal",
+                        status,
+                    })?;
+
+            let opt_body = request
+                .extract::<Option<String>, _>()
                 .await
-                .map_err(|_| AppError::AuthFailure(StatusCode::UNAUTHORIZED))?;
+                .expect("infallible");
 
             // Any internal URL is subject to requiring auth through the master key.
             if !rp.auth_provider.check_credentials(&creds).await {
-                return Response::builder()
-                    .status(StatusCode::FORBIDDEN)
-                    .body(Body::empty())
-                    .map_err(|_| AppError::AssertionFailed("should not fail to build response"));
+                return Err(AppError::AuthFailure {
+                    realm: "internal",
+                    status: StatusCode::FORBIDDEN,
+                });
             }
 
             let remainder = uri
