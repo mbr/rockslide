@@ -297,7 +297,7 @@ async fn route_request(
             trace!(%dest, "reverse proxying");
 
             // First, check if http authentication is enabled.
-            if let Some(ref http_access) = config.http_access {
+            if let Some(ref http_access) = config.http.access {
                 let creds = request
                     .extract_parts::<UnverifiedCredentials>()
                     .await
@@ -310,7 +310,7 @@ async fn route_request(
                 if !http_access.check_credentials(&creds).await {
                     return Err(AppError::AuthFailure {
                         realm: "password protected container",
-                        status: StatusCode::FORBIDDEN,
+                        status: StatusCode::UNAUTHORIZED,
                     });
                 }
             }
@@ -371,7 +371,7 @@ async fn route_request(
             if !rp.auth_provider.check_credentials(&creds).await {
                 return Err(AppError::AuthFailure {
                     realm: "internal",
-                    status: StatusCode::FORBIDDEN,
+                    status: StatusCode::UNAUTHORIZED,
                 });
             }
 

@@ -63,10 +63,16 @@ impl PublishedContainer {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub(crate) struct RuntimeConfig {
     #[serde(default)]
-    pub(crate) http_access: Option<HashMap<String, Secret<String>>>,
+    pub(crate) http: Http,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub(crate) struct Http {
+    #[serde(default)]
+    pub(crate) access: Option<HashMap<String, Secret<String>>>,
 }
 
 impl IntoResponse for RuntimeConfig {
@@ -378,5 +384,37 @@ impl PortMapping {
         let ip = Ipv4Addr::from_str(&self.host_ip).ok()?;
 
         Some((ip, self.host_port).into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use sec::Secret;
+
+    use crate::container_orchestrator::Http;
+
+    use super::RuntimeConfig;
+
+    #[test]
+    fn can_parse_sample_configs() {
+        let example = r#"
+            [http]
+            access = { someuser = "somepw" }
+            "#;
+
+        let parsed: RuntimeConfig = toml::from_str(example).expect("should parse");
+
+        let mut pw_map = HashMap::new();
+        pw_map.insert("someuser".to_owned(), Secret::new("somepw".to_owned()));
+        assert_eq!(
+            parsed,
+            RuntimeConfig {
+                http: Http {
+                    access: Some(pw_map)
+                }
+            }
+        )
     }
 }

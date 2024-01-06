@@ -512,7 +512,7 @@ mod tests {
         let tmp = TempDir::new("rockslide-test").expect("could not create temporary directory");
 
         let password = "random-test-password".to_owned();
-        let master_key = MasterKey::new_key(password.clone());
+        let master_key = Arc::new(MasterKey::new_key(password.clone()));
 
         let registry = ContainerRegistry::new(tmp.as_ref(), (), master_key)
             .expect("should not fail to create app");
