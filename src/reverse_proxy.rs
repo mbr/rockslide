@@ -278,8 +278,44 @@ async fn route_request(
         routing_table.get_destination_uri_from_request(&request)
     };
 
-    let dest = match dest_uri {
-        Destination::ReverseProxied(dest) => dest,
+    match dest_uri {
+        Destination::ReverseProxied(dest) => {
+            trace!(%dest, "reverse proxying");
+
+            // Note: `reqwest` and `axum` currently use different versions of `http`
+            let method = request.method().to_string().parse().map_err(|_| {
+                AppError::AssertionFailed("method http version mismatch workaround failed")
+            })?;
+            let response = rp.client.request(method, dest.to_string()).send().await;
+
+            match response {
+                Ok(response) => {
+                    let mut bld = Response::builder().status(response.status().as_u16());
+                    for (key, value) in response.headers() {
+                        if HOP_BY_HOP.contains(key) {
+                            continue;
+                        }
+
+                        let key_string = key.to_string();
+                        let value_str = value.to_str().map_err(|_| AppError::NonUtf8Header)?;
+
+                        bld = bld.header(key_string, value_str);
+                    }
+                    Ok(bld.body(Body::from(response.bytes().await?)).map_err(|_| {
+                        AppError::AssertionFailed("should not fail to construct response")
+                    })?)
+                }
+                Err(err) => {
+                    warn!(%err, %dest, "failed request");
+                    Ok(Response::builder()
+                        .status(500)
+                        .body(Body::empty())
+                        .map_err(|_| {
+                            AppError::AssertionFailed("should not fail to construct error response")
+                        })?)
+                }
+            }
+        }
         Destination::Internal(uri) => {
             let method = request.method().clone();
             // Note: The auth functionality has been lifted from `registry`. It may need to be
@@ -321,7 +357,7 @@ async fn route_request(
                 .get()
                 .ok_or_else(|| AppError::AssertionFailed("no orchestrator configured"))?;
 
-            return match method {
+            match method {
                 Method::GET => {
                     let config = orchestrator
                         .load_config(&manifest_reference)
@@ -342,47 +378,9 @@ async fn route_request(
                     Ok(stored.into_response())
                 }
                 _ => Err(AppError::InternalUrlInvalid),
-            };
-        }
-        Destination::NotFound => {
-            return Err(AppError::NoSuchContainer);
-        }
-    };
-    trace!(%dest, "reverse proxying");
-
-    // Note: `reqwest` and `axum` currently use different versions of `http`
-    let method =
-        request.method().to_string().parse().map_err(|_| {
-            AppError::AssertionFailed("method http version mismatch workaround failed")
-        })?;
-    let response = rp.client.request(method, dest.to_string()).send().await;
-
-    match response {
-        Ok(response) => {
-            let mut bld = Response::builder().status(response.status().as_u16());
-            for (key, value) in response.headers() {
-                if HOP_BY_HOP.contains(key) {
-                    continue;
-                }
-
-                let key_string = key.to_string();
-                let value_str = value.to_str().map_err(|_| AppError::NonUtf8Header)?;
-
-                bld = bld.header(key_string, value_str);
             }
-            Ok(bld
-                .body(Body::from(response.bytes().await?))
-                .map_err(|_| AppError::AssertionFailed("should not fail to construct response"))?)
         }
-        Err(err) => {
-            warn!(%err, %dest, "failed request");
-            Ok(Response::builder()
-                .status(500)
-                .body(Body::empty())
-                .map_err(|_| {
-                    AppError::AssertionFailed("should not fail to construct error response")
-                })?)
-        }
+        Destination::NotFound => Err(AppError::NoSuchContainer),
     }
 }
 
