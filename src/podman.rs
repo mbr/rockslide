@@ -27,12 +27,15 @@ impl Podman {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn inspect(&self, container: &str) -> Result<serde_json::Value, CommandError> {
+    pub(crate) async fn inspect(
+        &self,
+        type_: &str,
+        id: &str,
+    ) -> Result<serde_json::Value, CommandError> {
         let mut cmd = self.mk_podman_command();
         cmd.arg("inspect");
-        cmd.arg(container);
-        cmd.args(["--format", "json"]);
+        cmd.arg(id);
+        cmd.args(["--format", "json", "--type", type_]);
         fetch_json(cmd).await
     }
 
@@ -99,6 +102,7 @@ impl Podman {
             rmi: false,
             tls_verify: true,
             env: Vec::new(),
+            volumes: Vec::new(),
             publish: Vec::new(),
         }
     }
@@ -135,10 +139,11 @@ pub(crate) struct RunCommand<'a> {
     env: Vec<(String, String)>,
     image_url: String,
     name: Option<String>,
+    publish: Vec<String>,
     rm: bool,
     rmi: bool,
     tls_verify: bool,
-    publish: Vec<String>,
+    volumes: Vec<(PathBuf, PathBuf)>,
 }
 
 impl<'a> RunCommand<'a> {
@@ -178,8 +183,31 @@ impl<'a> RunCommand<'a> {
     }
 
     #[inline]
+    pub(crate) fn bind_volume<P: Into<PathBuf>, Q: Into<PathBuf>>(
+        &mut self,
+        host_path: P,
+        container_path: Q,
+    ) -> &mut Self {
+        self.volumes.push((host_path.into(), container_path.into()));
+        self
+    }
+
+    #[inline]
+    pub(crate) fn bind_volumes<P: Into<PathBuf>, Q: Into<PathBuf>>(
+        &mut self,
+        volumes: impl IntoIterator<Item = (P, Q)>,
+    ) -> &mut Self {
+        for (host_path, container_path) in volumes {
+            self.bind_volume(host_path, container_path);
+        }
+        self
+    }
+
+    #[inline]
     pub(crate) async fn execute(&self) -> Result<Output, CommandError> {
         let mut cmd = self.podman.mk_podman_command();
+
+        dbg!(&self.volumes);
 
         cmd.arg("run");
         cmd.arg(format!("--tls-verify={}", self.tls_verify));
