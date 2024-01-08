@@ -1,5 +1,5 @@
 use std::{
-    fmt::Display,
+    fmt::{self, Display},
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
@@ -37,7 +37,7 @@ impl Digest {
 }
 
 impl Display for Digest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&hex::encode(&self.0[..]))
     }
 }
@@ -55,11 +55,23 @@ pub(crate) struct ImageLocation {
     image: String,
 }
 
+impl Display for ImageLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.repository, self.image)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ManifestReference {
     #[serde(flatten)]
     location: ImageLocation,
     reference: Reference,
+}
+
+impl Display for ManifestReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.location, self.reference)
+    }
 }
 
 impl ManifestReference {
@@ -77,6 +89,13 @@ impl ManifestReference {
 
     pub(crate) fn reference(&self) -> &Reference {
         &self.reference
+    }
+
+    pub(crate) fn namespaced_dir<P: AsRef<Path>>(&self, base: P) -> PathBuf {
+        base.as_ref()
+            .join(self.location.repository())
+            .join(self.location.image())
+            .join(self.reference.to_string().trim_start_matches(':'))
     }
 }
 
@@ -151,7 +170,7 @@ impl Reference {
 }
 
 impl Display for Reference {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Reference::Tag(tag) => Display::fmt(tag, f),
             Reference::Digest(digest) => Display::fmt(digest, f),

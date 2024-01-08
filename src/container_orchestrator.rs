@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::str::FromStr;
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
@@ -40,6 +40,7 @@ pub(crate) struct ContainerOrchestrator {
     local_addr: SocketAddr,
     registry_credentials: (String, Secret<String>),
     configs_dir: PathBuf,
+    volumes_dir: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -110,27 +111,28 @@ impl ContainerOrchestrator {
             fs::create_dir(&configs_dir).context("could not create config dir")?;
         }
 
+        let volumes_dir = runtime_dir
+            .as_ref()
+            .canonicalize()
+            .context("could not canonicalize runtime volumes dir")?
+            .join("volumes");
+
+        if !volumes_dir.exists() {
+            fs::create_dir(&volumes_dir).context("could not create volumes dir")?;
+        }
+
         Ok(Self {
             podman,
             reverse_proxy,
             local_addr,
             registry_credentials,
             configs_dir,
+            volumes_dir,
         })
     }
 
     fn config_path(&self, manifest_reference: &ManifestReference) -> PathBuf {
-        let location = manifest_reference.location();
-
-        self.configs_dir
-            .join(location.repository())
-            .join(location.image())
-            .join(
-                manifest_reference
-                    .reference()
-                    .to_string()
-                    .trim_start_matches(':'),
-            )
+        manifest_reference.namespaced_dir(&self.configs_dir)
     }
 
     pub(crate) async fn load_config(
@@ -239,6 +241,20 @@ impl ContainerOrchestrator {
         let production_tag = "prod";
 
         if matches!(manifest_reference.reference(), Reference::Tag(tag) if tag == production_tag) {
+            let image_json_raw = try_quiet!(
+                self.podman
+                    .inspect("image", &manifest_reference.to_string())
+                    .await,
+                "failed to fetch image information via inspect"
+            );
+            let image_json: Vec<ImageJson> = try_quiet!(
+                serde_json::from_value(image_json_raw),
+                "failed to deserialize image information"
+            );
+            let volumes = try_quiet!(image_json.get(0).ok_or(""), "no information via inspect")
+                .config
+                .volume_iter();
+
             let location = manifest_reference.location();
             let name = format!("rockslide-{}-{}", location.repository(), location.image());
 
@@ -276,10 +292,30 @@ impl ContainerOrchestrator {
                 "failed to pull container"
             );
 
+            // Prepare volumes.
+            let volume_base = manifest_reference.namespaced_dir(&self.volumes_dir);
+
+            let mut podman_run = self.podman.run(&image_url);
+
+            for vol_desc in volumes {
+                let host_path = volume_base.join(&vol_desc);
+
+                let mut container_path = PathBuf::from("/");
+                container_path.push(vol_desc.as_ref());
+
+                if !host_path.exists() {
+                    try_quiet!(
+                        tokio::fs::create_dir_all(&host_path).await,
+                        "could not create volume path"
+                    );
+                }
+
+                podman_run.bind_volume(host_path, container_path);
+            }
+
             info!(%name, "starting container");
             try_quiet!(
-                self.podman
-                    .run(&image_url)
+                podman_run
                     .rm()
                     .rmi()
                     .name(name)
@@ -314,6 +350,89 @@ struct ContainerJson {
     names: Vec<String>,
     #[serde(deserialize_with = "nullable_array")]
     ports: Vec<PortMapping>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ImageJson {
+    config: ImageConfigJson,
+}
+
+// See: https://github.com/opencontainers/image-spec/blob/main/config.md
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ImageConfigJson {
+    #[serde(default)]
+    volumes: HashMap<PathBuf, EmptyGoStruct>,
+}
+
+#[derive(Debug)]
+struct VolumeDesc(PathBuf);
+
+impl VolumeDesc {
+    fn from_path<P: AsRef<Path>>(path: P) -> Option<VolumeDesc> {
+        let mut path = path.as_ref();
+        if !path.is_relative() {
+            path = path.strip_prefix("/").ok()?;
+        }
+
+        let mut parts = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::CurDir
+                | Component::ParentDir => {
+                    // These are all illegal.
+                    return None;
+                }
+                Component::Normal(os_str) => parts.push(os_str),
+            }
+        }
+
+        Some(VolumeDesc(parts))
+    }
+}
+
+impl AsRef<Path> for VolumeDesc {
+    #[inline(always)]
+    fn as_ref(&self) -> &Path {
+        self.0.as_ref()
+    }
+}
+
+impl ImageConfigJson {
+    fn volume_iter(&self) -> Vec<VolumeDesc> {
+        self.volumes
+            .keys()
+            .filter_map(VolumeDesc::from_path)
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+struct EmptyGoStruct;
+
+impl Serialize for EmptyGoStruct {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        HashMap::<(), ()>::new().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EmptyGoStruct {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let deserialized: HashMap<(), ()> = Deserialize::deserialize(deserializer)?;
+        if !deserialized.is_empty() {
+            return Err(serde::de::Error::custom("should be empty string"));
+        }
+        Ok(EmptyGoStruct)
+    }
 }
 
 impl ContainerJson {
