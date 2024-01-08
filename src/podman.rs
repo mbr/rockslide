@@ -193,21 +193,8 @@ impl<'a> RunCommand<'a> {
     }
 
     #[inline]
-    pub(crate) fn bind_volumes<P: Into<PathBuf>, Q: Into<PathBuf>>(
-        &mut self,
-        volumes: impl IntoIterator<Item = (P, Q)>,
-    ) -> &mut Self {
-        for (host_path, container_path) in volumes {
-            self.bind_volume(host_path, container_path);
-        }
-        self
-    }
-
-    #[inline]
     pub(crate) async fn execute(&self) -> Result<Output, CommandError> {
         let mut cmd = self.podman.mk_podman_command();
-
-        dbg!(&self.volumes);
 
         cmd.arg("run");
         cmd.arg(format!("--tls-verify={}", self.tls_verify));
@@ -230,11 +217,19 @@ impl<'a> RunCommand<'a> {
         }
 
         for publish in &self.publish {
-            cmd.args(["-p", publish.as_str()]);
+            cmd.args(["--publish", publish.as_str()]);
         }
 
         for (key, value) in &self.env {
-            cmd.args(["-e", &format!("{}={}", key, value)]);
+            cmd.args(["--env", &format!("{}={}", key, value)]);
+        }
+
+        for (host_dir, container_dir) in &self.volumes {
+            cmd.arg(format!(
+                "--volume={}:{}",
+                host_dir.display(),
+                container_dir.display()
+            ));
         }
 
         cmd.arg(&self.image_url);
