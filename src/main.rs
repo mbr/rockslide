@@ -69,16 +69,15 @@ async fn main() -> anyhow::Result<()> {
         )
             .to_socket_addrs()
             .ok()
-            .and_then(|addrs| addrs.into_iter().next())
-            .ok_or_else(|| anyhow::anyhow!("failed to resolve local hostname"))?;
+            .and_then(|addrs| addrs.into_iter().find(SocketAddr::is_ipv4))
+            .ok_or_else(|| anyhow::anyhow!("failed to resolve local hostname to ipv4"))?;
         dummy_addr.ip()
     } else {
         [127, 0, 0, 1].into()
     };
 
     let local_addr = SocketAddr::from((local_ip, cfg.reverse_proxy.http_bind.port()));
-    // TODO: Fix (see #34).
-    let local_addr = SocketAddr::from(([127, 0, 0, 1], cfg.reverse_proxy.http_bind.port()));
+
     info!(%local_addr, "guessing local registry address");
 
     let reverse_proxy = ReverseProxy::new(auth_provider.clone());
