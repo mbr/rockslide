@@ -19,7 +19,7 @@ use axum::{
 };
 use itertools::Itertools;
 use tokio::sync::RwLock;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use crate::{
     container_orchestrator::{ContainerOrchestrator, PublishedContainer, RuntimeConfig},
@@ -41,6 +41,32 @@ pub(crate) struct RoutingTable {
     domain_maps: HashMap<Domain, PublishedContainer>,
 }
 
+impl Display for RoutingTable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+
+        for (location, container) in &self.path_maps {
+            if !first {
+                f.write_str(", ")?;
+            }
+
+            write!(f, "/{} -> {}", location, container)?;
+            first = false;
+        }
+
+        for (domain, container) in &self.domain_maps {
+            if !first {
+                f.write_str(", ")?;
+            }
+
+            write!(f, "{} -> {}", domain, container)?;
+            first = false;
+        }
+
+        Ok(())
+    }
+}
+
 impl RoutingTable {
     #[inline(always)]
     fn get_path_route(&self, image_location: &ImageLocation) -> Option<&PublishedContainer> {
@@ -55,6 +81,13 @@ impl RoutingTable {
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 struct Domain(String);
+
+impl Display for Domain {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <String as Display>::fmt(&self.0, f)
+    }
+}
 
 impl Domain {
     fn new(raw: &str) -> Option<Self> {
@@ -258,6 +291,10 @@ impl ReverseProxy {
 
         let mut guard = self.routing_table.write().await;
         mem::swap(&mut *guard, &mut routing_table);
+        info!(
+            routing_table = %*guard,
+            "reverse proxy updated routing table"
+        )
     }
 
     pub(crate) fn set_orchestrator(&self, orchestrator: Arc<ContainerOrchestrator>) -> &Self {

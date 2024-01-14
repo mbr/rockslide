@@ -39,6 +39,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
+use tracing::info;
 use uuid::Uuid;
 
 pub(crate) use {
@@ -402,6 +403,7 @@ async fn upload_finalize(
         .finalize_upload(upload, digest.digest)
         .await?;
 
+    info!(%upload, %digest, "new image uploaded");
     Ok(Response::builder()
         .status(StatusCode::CREATED)
         .header("Docker-Content-Digest", digest.to_string())
@@ -419,6 +421,7 @@ async fn manifest_put(
         .put_manifest(&manifest_reference, image_manifest_json.as_bytes())
         .await?;
 
+    info!(%manifest_reference, %digest, "new manifest received");
     // Completed upload, call hook:
     registry
         .hooks
