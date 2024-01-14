@@ -252,7 +252,12 @@ impl ContainerOrchestrator {
 
         if matches!(manifest_reference.reference(), Reference::Tag(tag) if tag == production_tag) {
             let location = manifest_reference.location();
-            let name = format!("rockslide-{}-{}", location.repository(), location.image());
+
+            let name = format!(
+                "rockslide---{}---{}",
+                location.repository(),
+                location.image()
+            );
 
             debug!(%name, "removing (potentially nonexistant) container");
 
@@ -453,11 +458,11 @@ impl<'de> Deserialize<'de> for EmptyGoStruct {
 
 impl ContainerJson {
     fn image_location(&self) -> Option<ImageLocation> {
-        const PREFIX: &str = "rockslide-";
+        const PREFIX: &str = "rockslide---";
 
         for name in &self.names {
             if let Some(subname) = name.strip_prefix(PREFIX) {
-                if let Some((left, right)) = subname.split_once('-') {
+                if let Some((left, right)) = subname.split_once("---") {
                     return Some(ImageLocation::new(left.to_owned(), right.to_owned()));
                 }
             }

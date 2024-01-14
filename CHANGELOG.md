@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * Log messages have been cleaned up.
+* The name separator in container names changed from `-` to `---` to allow dashes in domains.
 
 ### Fixed
 
