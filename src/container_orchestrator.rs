@@ -251,20 +251,6 @@ impl ContainerOrchestrator {
         let production_tag = "prod";
 
         if matches!(manifest_reference.reference(), Reference::Tag(tag) if tag == production_tag) {
-            let image_json_raw = self
-                .podman
-                .inspect("image", &manifest_reference.to_string())
-                .await
-                .context("failed to fetch image information via inspect")?;
-
-            let image_json: Vec<ImageJson> = serde_json::from_value(image_json_raw)
-                .context("failed to deserialize image information")?;
-            let volumes = image_json
-                .get(0)
-                .context("no information via inspect")?
-                .config
-                .volume_iter();
-
             let location = manifest_reference.location();
             let name = format!("rockslide-{}-{}", location.repository(), location.image());
 
@@ -305,6 +291,19 @@ impl ContainerOrchestrator {
 
             // Prepare volumes.
             let volume_base = manifest_reference.namespaced_dir(&self.volumes_dir);
+
+            let image_json_raw = self
+                .podman
+                .inspect("image", &image_url)
+                .await
+                .context("failed to fetch image information via inspect")?;
+            let image_json: Vec<ImageJson> = serde_json::from_value(image_json_raw)
+                .context("failed to deserialize image information")?;
+            let volumes = image_json
+                .get(0)
+                .context("no information via inspect")?
+                .config
+                .volume_iter();
 
             let mut podman_run = self.podman.run(&image_url);
 
