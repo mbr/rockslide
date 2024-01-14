@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Component, PathBuf};
@@ -20,7 +21,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use sec::Secret;
 use serde::{Deserialize, Deserializer, Serialize};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 macro_rules! try_quiet {
     ($ex:expr, $msg:expr) => {
@@ -48,6 +49,12 @@ pub(crate) struct PublishedContainer {
     host_addr: SocketAddr,
     manifest_reference: ManifestReference,
     config: Arc<RuntimeConfig>,
+}
+
+impl Display for PublishedContainer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.manifest_reference, self.host_addr,)
+    }
 }
 
 impl PublishedContainer {
@@ -230,39 +237,43 @@ impl ContainerOrchestrator {
             "could not fetch running containers"
         );
 
-        info!(?running, "updating running container set");
+        debug!(?running, "updating running container set");
         self.reverse_proxy
             .update_containers(running.into_iter())
             .await;
     }
 
-    async fn synchronize_container_state(&self, manifest_reference: &ManifestReference) {
+    async fn synchronize_container_state(
+        &self,
+        manifest_reference: &ManifestReference,
+    ) -> anyhow::Result<bool> {
         // TODO: Make configurable?
         let production_tag = "prod";
 
         if matches!(manifest_reference.reference(), Reference::Tag(tag) if tag == production_tag) {
-            let image_json_raw = try_quiet!(
-                self.podman
-                    .inspect("image", &manifest_reference.to_string())
-                    .await,
-                "failed to fetch image information via inspect"
-            );
-            let image_json: Vec<ImageJson> = try_quiet!(
-                serde_json::from_value(image_json_raw),
-                "failed to deserialize image information"
-            );
-            let volumes = try_quiet!(image_json.get(0).ok_or(""), "no information via inspect")
+            let image_json_raw = self
+                .podman
+                .inspect("image", &manifest_reference.to_string())
+                .await
+                .context("failed to fetch image information via inspect")?;
+
+            let image_json: Vec<ImageJson> = serde_json::from_value(image_json_raw)
+                .context("failed to deserialize image information")?;
+            let volumes = image_json
+                .get(0)
+                .context("no information via inspect")?
                 .config
                 .volume_iter();
 
             let location = manifest_reference.location();
             let name = format!("rockslide-{}-{}", location.repository(), location.image());
 
-            info!(%name, "removing (potentially nonexistant) container");
-            try_quiet!(
-                self.podman.rm(&name, true).await,
-                "failed to remove container"
-            );
+            debug!(%name, "removing (potentially nonexistant) container");
+
+            self.podman
+                .rm(&name, true)
+                .await
+                .context("failed to remove container")?;
 
             let image_url = format!(
                 "{}/{}/{}:{}",
@@ -272,25 +283,25 @@ impl ContainerOrchestrator {
                 production_tag
             );
 
-            info!(%name, "loggging in");
-            try_quiet!(
-                self.podman
-                    .login(
-                        &self.registry_credentials.0,
-                        self.registry_credentials.1.as_str(),
-                        self.local_addr.to_string().as_ref(),
-                        false
-                    )
-                    .await,
-                "failed to login to local registry"
-            );
+            debug!(%name, "loggging in");
+
+            self.podman
+                .login(
+                    &self.registry_credentials.0,
+                    self.registry_credentials.1.as_str(),
+                    self.local_addr.to_string().as_ref(),
+                    false,
+                )
+                .await
+                .context("failed to login to local registry")?;
 
             // We always pull the container to ensure we have the latest version.
-            info!(%name, "pulling container");
-            try_quiet!(
-                self.podman.pull(&image_url).await,
-                "failed to pull container"
-            );
+            debug!(%name, "pulling container");
+
+            self.podman
+                .pull(&image_url)
+                .await
+                .context("failed to pull container")?;
 
             // Prepare volumes.
             let volume_base = manifest_reference.namespaced_dir(&self.volumes_dir);
@@ -304,37 +315,43 @@ impl ContainerOrchestrator {
                 container_path.push(vol_desc.as_ref());
 
                 if !host_path.exists() {
-                    try_quiet!(
-                        tokio::fs::create_dir_all(&host_path).await,
-                        "could not create volume path"
-                    );
+                    tokio::fs::create_dir_all(&host_path)
+                        .await
+                        .context("could not create volume path")?;
                 }
 
                 podman_run.bind_volume(host_path, container_path);
             }
 
-            info!(%name, "starting container");
-            try_quiet!(
-                podman_run
-                    .rm()
-                    .rmi()
-                    .name(name)
-                    .tls_verify(false)
-                    .publish("127.0.0.1::8000")
-                    .env("PORT", "8000")
-                    .execute()
-                    .await,
-                "failed to launch container"
-            );
+            debug!(%name, "starting container");
 
-            info!(?manifest_reference, "new production image running");
+            podman_run
+                .rm()
+                .rmi()
+                .name(&name)
+                .tls_verify(false)
+                .publish("127.0.0.1::8000")
+                .env("PORT", "8000")
+                .execute()
+                .await
+                .context("failed to launch container")?;
+
+            info!(%name, %manifest_reference, "new production image running");
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
     pub(crate) async fn synchronize_all(&self) -> anyhow::Result<()> {
+        info!("synchronizing rockslide managed containers");
         for container in self.fetch_managed_containers(true).await? {
-            self.synchronize_container_state(container.manifest_reference())
-                .await;
+            if let Err(err) = self
+                .synchronize_container_state(container.manifest_reference())
+                .await
+            {
+                warn!(manifest=%container.manifest_reference, %err, "failed to synchronize container")
+            }
         }
 
         Ok(())
@@ -472,7 +489,9 @@ impl ContainerJson {
 #[async_trait]
 impl RegistryHooks for Arc<ContainerOrchestrator> {
     async fn on_manifest_uploaded(&self, manifest_reference: &ManifestReference) {
-        self.synchronize_container_state(manifest_reference).await;
+        if let Err(err) = self.synchronize_container_state(manifest_reference).await {
+            warn!(%manifest_reference, %err, "could not synchronize a container for newly uploaded manifest");
+        }
 
         self.updated_published_set().await;
     }

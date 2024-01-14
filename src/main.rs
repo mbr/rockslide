@@ -5,14 +5,13 @@ pub(crate) mod registry;
 mod reverse_proxy;
 
 use std::{
-    env, fs,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::Arc,
 };
 
 use anyhow::Context;
 use axum::Router;
-use config::Config;
+
 use gethostname::gethostname;
 use registry::ContainerRegistry;
 use reverse_proxy::ReverseProxy;
@@ -37,13 +36,13 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    debug!(?cfg, "loaded configuration");
+    info!(?cfg, "loaded configuration");
 
     let rockslide_pw = cfg.rockslide.master_key.as_secret_string();
     let auth_provider = Arc::new(cfg.rockslide.master_key);
 
     let local_ip: IpAddr = if podman_is_remote() {
-        info!("podman is remote, trying to guess IP address");
+        debug!("podman instance is remote, trying to guess our external IP address");
         let local_hostname = gethostname();
         let dummy_addr = (
             local_hostname
@@ -57,12 +56,14 @@ async fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("failed to resolve local hostname to ipv4"))?;
         dummy_addr.ip()
     } else {
+        debug!("podman is running locally, using localhost IP");
         [127, 0, 0, 1].into()
     };
 
+    // The address under which our application is reachable, will be passed to podman.
     let local_addr = SocketAddr::from((local_ip, cfg.reverse_proxy.http_bind.port()));
 
-    info!(%local_addr, "guessing local registry address");
+    info!(%local_addr, "guessed local registry (i.e. our) address");
 
     let reverse_proxy = ReverseProxy::new(auth_provider.clone());
 
