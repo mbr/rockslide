@@ -20,25 +20,9 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{container_orchestrator::ContainerOrchestrator, podman::podman_is_remote};
-
-fn load_config() -> anyhow::Result<Config> {
-    match env::args().len() {
-        0 | 1 => Ok(Default::default()),
-        2 => {
-            let arg = env::args().nth(1).expect("should have arg 1");
-            let contents = fs::read_to_string(&arg)
-                .context("could not read configuration file")
-                .context(arg)?;
-            let cfg = toml::from_str(&contents).context("failed to parse configuration")?;
-
-            Ok(cfg)
-        }
-        _ => Err(anyhow::anyhow!(
-            "expected at most one command arg, pointing to a config file"
-        )),
-    }
-}
+use crate::{
+    config::load_config, container_orchestrator::ContainerOrchestrator, podman::podman_is_remote,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
