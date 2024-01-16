@@ -29,7 +29,9 @@ in rustPlatform.buildRustPackage {
   # helpful for running locally in a `nix-shell`.
   nativeBuildInputs = with pkgs; [ podman ]
     ++ (if isMacOS then with darwin.apple_sdk.frameworks; [ SystemConfiguration qemu ] else []);
-  buildPhase = "./build.sh";
+  buildPhase = ''
+    cargo build --release --offline --target=${target}
+  '';
   installPhase = ''
     mkdir -p $out/bin
     cp target/${target}/release/${cargoToml.package.name} $out/bin
