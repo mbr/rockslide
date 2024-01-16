@@ -36,5 +36,5 @@ in rustPlatform.buildRustPackage {
     mkdir -p $out/bin
     cp target/${target}/release/${cargoToml.package.name} $out/bin
   '';
-  PODMAN_IS_REMOTE="true";
+  PODMAN_IS_REMOTE=if isMacOS then "true" else "false";
 }
