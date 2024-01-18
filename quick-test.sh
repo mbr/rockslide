@@ -12,3 +12,7 @@ podman login --tls-verify=false --username devuser --password devpw http://${REG
 podman pull crccheck/hello-world
 podman tag crccheck/hello-world ${REGISTRY_ADDR}/testing/hello:prod
 podman push --tls-verify=false ${REGISTRY_ADDR}/testing/hello:prod
+
+sleep 2
+
+curl -v http://${REGISTRY_ADDR}/testing/hello
