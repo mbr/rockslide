@@ -110,6 +110,7 @@ impl PartialEq<String> for Domain {
 enum Destination {
     ReverseProxied {
         uri: Uri,
+        script_name: Option<String>,
         config: Arc<RuntimeConfig>,
     },
     Internal(Uri),
@@ -167,6 +168,7 @@ impl RoutingTable {
             );
             return Destination::ReverseProxied {
                 uri: Uri::from_parts(parts).expect("should not have invalidated Uri"),
+                script_name: None,
                 config: pc.config().clone(),
             };
         }
@@ -200,6 +202,7 @@ impl RoutingTable {
 
                 return Destination::ReverseProxied {
                     uri: Uri::from_parts(parts).unwrap(),
+                    script_name: Some(image_location.to_string()),
                     config: pc.config().clone(),
                 };
             }
@@ -330,7 +333,11 @@ async fn route_request(
     };
 
     match dest_uri {
-        Destination::ReverseProxied { uri: dest, config } => {
+        Destination::ReverseProxied {
+            uri: dest,
+            script_name,
+            config,
+        } => {
             trace!(%dest, "reverse proxying");
 
             // First, check if http authentication is enabled.
@@ -371,6 +378,11 @@ async fn route_request(
 
                         bld = bld.header(key_string, value_str);
                     }
+
+                    if let Some(script_name) = script_name {
+                        bld = bld.header("X-Script-Name", script_name);
+                    }
+
                     Ok(bld.body(Body::from(response.bytes().await?)).map_err(|_| {
                         AppError::AssertionFailed("should not fail to construct response")
                     })?)
