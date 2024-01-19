@@ -370,6 +370,22 @@ async fn route_request(
 
             let mut req = rp.client.request(method, dest.to_string());
 
+            for (name, value) in request.headers() {
+                let name: reqwest::header::HeaderName = if let Ok(name) = name.as_str().parse() {
+                    name
+                } else {
+                    continue;
+                };
+
+                if !BLACKLISTED.contains(&name) && !HOP_BY_HOP.contains(&name) {
+                    if let Ok(value) = value.to_str() {
+                        req = req.header(name, value);
+                    } else {
+                        continue;
+                    }
+                }
+            }
+
             // Attach script name.
             if let Some(script_name) = script_name {
                 req = req.header("X-Script-Name", script_name);
@@ -487,7 +503,7 @@ async fn route_request(
 }
 
 /// HTTP/1.1 hop-by-hop headers
-mod hop_by_hop {
+mod known_headers {
     use reqwest::header::HeaderName;
     pub(super) static HOP_BY_HOP: [HeaderName; 8] = [
         HeaderName::from_static("keep-alive"),
@@ -499,5 +515,7 @@ mod hop_by_hop {
         HeaderName::from_static("proxy-authorization"),
         HeaderName::from_static("proxy-authenticate"),
     ];
+    pub(super) static BLACKLISTED: [HeaderName; 1] = [HeaderName::from_static("x-script-name")];
 }
-use hop_by_hop::HOP_BY_HOP;
+use known_headers::BLACKLISTED;
+use known_headers::HOP_BY_HOP;
