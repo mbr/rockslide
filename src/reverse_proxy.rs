@@ -222,6 +222,7 @@ enum AppError {
         status: StatusCode,
     },
     InvalidPayload,
+    BodyReadError(axum::Error),
     Internal(anyhow::Error),
 }
 
@@ -235,6 +236,7 @@ impl Display for AppError {
             AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
             AppError::AuthFailure { .. } => f.write_str("authentication missing or not present"),
             AppError::InvalidPayload => f.write_str("invalid payload"),
+            AppError::BodyReadError(err) => write!(f, "could not read body: {}", err),
             AppError::Internal(err) => Display::fmt(err, f),
         }
     }
@@ -264,6 +266,8 @@ impl IntoResponse for AppError {
                 .body(Body::empty())
                 .expect("should never fail to build auth failure response"),
             AppError::InvalidPayload => StatusCode::BAD_REQUEST.into_response(),
+            // TODO: Could probably be more specific here instead of just `BAD_REQUEST`:
+            AppError::BodyReadError(_) => StatusCode::BAD_REQUEST.into_response(),
             AppError::Internal(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
@@ -391,6 +395,15 @@ async fn route_request(
                 req = req.header("X-Script-Name", script_name);
             };
 
+            // Retrieve body.
+            let request_body = axum::body::to_bytes(
+                request.into_limited_body(),
+                1024 * 1024, // See #43.
+            )
+            .await
+            .map_err(AppError::BodyReadError)?;
+            req = req.body(request_body);
+
             let response = req.send().await;
 
             match response {
@@ -407,7 +420,8 @@ async fn route_request(
                         bld = bld.header(key_string, value_str);
                     }
 
-                    Ok(bld.body(Body::from(response.bytes().await?)).map_err(|_| {
+                    let body = response.bytes().await?;
+                    Ok(bld.body(Body::from(body)).map_err(|_| {
                         AppError::AssertionFailed("should not fail to construct response")
                     })?)
                 }

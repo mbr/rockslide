@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::Context;
-use axum::Router;
+use axum::{extract::DefaultBodyLimit, Router};
 
 use gethostname::gethostname;
 use registry::ContainerRegistry;
@@ -86,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .merge(registry.make_router())
         .merge(reverse_proxy.make_router())
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // See #43.
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(cfg.reverse_proxy.http_bind)
