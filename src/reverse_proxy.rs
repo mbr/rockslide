@@ -202,7 +202,7 @@ impl RoutingTable {
 
                 return Destination::ReverseProxied {
                     uri: Uri::from_parts(parts).unwrap(),
-                    script_name: Some(image_location.to_string()),
+                    script_name: Some(format!("/{}", image_location)),
                     config: pc.config().clone(),
                 };
             }
@@ -363,7 +363,15 @@ async fn route_request(
             let method = request.method().to_string().parse().map_err(|_| {
                 AppError::AssertionFailed("method http version mismatch workaround failed")
             })?;
-            let response = rp.client.request(method, dest.to_string()).send().await;
+
+            let mut req = rp.client.request(method, dest.to_string());
+
+            // Attach script name.
+            if let Some(script_name) = script_name {
+                req = req.header("X-Script-Name", script_name);
+            };
+
+            let response = req.send().await;
 
             match response {
                 Ok(response) => {
@@ -377,10 +385,6 @@ async fn route_request(
                         let value_str = value.to_str().map_err(|_| AppError::NonUtf8Header)?;
 
                         bld = bld.header(key_string, value_str);
-                    }
-
-                    if let Some(script_name) = script_name {
-                        bld = bld.header("X-Script-Name", script_name);
                     }
 
                     Ok(bld.body(Body::from(response.bytes().await?)).map_err(|_| {
