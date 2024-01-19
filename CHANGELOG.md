@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* Headers from external clients are passed through to running containers.
+* The `X-Script-Name` header is set for path based reverse proxying.
+
 ### Changed
 
 * Log messages have been cleaned up.
