@@ -17,7 +17,6 @@ use axum::{
     response::{IntoResponse, Response},
     RequestExt, Router,
 };
-use itertools::Itertools;
 use tokio::sync::RwLock;
 use tracing::{info, trace, warn};
 
@@ -110,6 +109,7 @@ impl PartialEq<String> for Domain {
 enum Destination {
     ReverseProxied {
         uri: Uri,
+        script_name: Option<String>,
         config: Arc<RuntimeConfig>,
     },
     Internal(Uri),
@@ -167,6 +167,7 @@ impl RoutingTable {
             );
             return Destination::ReverseProxied {
                 uri: Uri::from_parts(parts).expect("should not have invalidated Uri"),
+                script_name: None,
                 config: pc.config().clone(),
             };
         }
@@ -200,6 +201,7 @@ impl RoutingTable {
 
                 return Destination::ReverseProxied {
                     uri: Uri::from_parts(parts).unwrap(),
+                    script_name: Some(format!("/{}", image_location)),
                     config: pc.config().clone(),
                 };
             }
@@ -220,6 +222,7 @@ enum AppError {
         status: StatusCode,
     },
     InvalidPayload,
+    BodyReadError(axum::Error),
     Internal(anyhow::Error),
 }
 
@@ -233,6 +236,7 @@ impl Display for AppError {
             AppError::NonUtf8Header => f.write_str("a header contained non-utf8 data"),
             AppError::AuthFailure { .. } => f.write_str("authentication missing or not present"),
             AppError::InvalidPayload => f.write_str("invalid payload"),
+            AppError::BodyReadError(err) => write!(f, "could not read body: {}", err),
             AppError::Internal(err) => Display::fmt(err, f),
         }
     }
@@ -262,6 +266,8 @@ impl IntoResponse for AppError {
                 .body(Body::empty())
                 .expect("should never fail to build auth failure response"),
             AppError::InvalidPayload => StatusCode::BAD_REQUEST.into_response(),
+            // TODO: Could probably be more specific here instead of just `BAD_REQUEST`:
+            AppError::BodyReadError(_) => StatusCode::BAD_REQUEST.into_response(),
             AppError::Internal(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
@@ -315,7 +321,12 @@ fn split_path_base_url(uri: &Uri) -> Option<(ImageLocation, String)> {
 
     // Now create the path, format is: '' / repository / image / ...
     // Need to skip the first three.
-    let remainder = segments.join("/");
+    let mut remainder = String::new();
+
+    segments.for_each(|segment| {
+        remainder.push('/');
+        remainder.push_str(segment);
+    });
 
     Some((image_location, remainder))
 }
@@ -330,7 +341,11 @@ async fn route_request(
     };
 
     match dest_uri {
-        Destination::ReverseProxied { uri: dest, config } => {
+        Destination::ReverseProxied {
+            uri: dest,
+            script_name,
+            config,
+        } => {
             trace!(%dest, "reverse proxying");
 
             // First, check if http authentication is enabled.
@@ -356,7 +371,40 @@ async fn route_request(
             let method = request.method().to_string().parse().map_err(|_| {
                 AppError::AssertionFailed("method http version mismatch workaround failed")
             })?;
-            let response = rp.client.request(method, dest.to_string()).send().await;
+
+            let mut req = rp.client.request(method, dest.to_string());
+
+            for (name, value) in request.headers() {
+                let name: reqwest::header::HeaderName = if let Ok(name) = name.as_str().parse() {
+                    name
+                } else {
+                    continue;
+                };
+
+                if !BLACKLISTED.contains(&name) && !HOP_BY_HOP.contains(&name) {
+                    if let Ok(value) = value.to_str() {
+                        req = req.header(name, value);
+                    } else {
+                        continue;
+                    }
+                }
+            }
+
+            // Attach script name.
+            if let Some(script_name) = script_name {
+                req = req.header("X-Script-Name", script_name);
+            };
+
+            // Retrieve body.
+            let request_body = axum::body::to_bytes(
+                request.into_limited_body(),
+                1024 * 1024, // See #43.
+            )
+            .await
+            .map_err(AppError::BodyReadError)?;
+            req = req.body(request_body);
+
+            let response = req.send().await;
 
             match response {
                 Ok(response) => {
@@ -371,7 +419,9 @@ async fn route_request(
 
                         bld = bld.header(key_string, value_str);
                     }
-                    Ok(bld.body(Body::from(response.bytes().await?)).map_err(|_| {
+
+                    let body = response.bytes().await?;
+                    Ok(bld.body(Body::from(body)).map_err(|_| {
                         AppError::AssertionFailed("should not fail to construct response")
                     })?)
                 }
@@ -467,7 +517,7 @@ async fn route_request(
 }
 
 /// HTTP/1.1 hop-by-hop headers
-mod hop_by_hop {
+mod known_headers {
     use reqwest::header::HeaderName;
     pub(super) static HOP_BY_HOP: [HeaderName; 8] = [
         HeaderName::from_static("keep-alive"),
@@ -479,5 +529,7 @@ mod hop_by_hop {
         HeaderName::from_static("proxy-authorization"),
         HeaderName::from_static("proxy-authenticate"),
     ];
+    pub(super) static BLACKLISTED: [HeaderName; 1] = [HeaderName::from_static("x-script-name")];
 }
-use hop_by_hop::HOP_BY_HOP;
+use known_headers::BLACKLISTED;
+use known_headers::HOP_BY_HOP;
