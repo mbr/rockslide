@@ -17,7 +17,6 @@ use axum::{
     response::{IntoResponse, Response},
     RequestExt, Router,
 };
-use itertools::Itertools;
 use tokio::sync::RwLock;
 use tracing::{info, trace, warn};
 
@@ -318,7 +317,12 @@ fn split_path_base_url(uri: &Uri) -> Option<(ImageLocation, String)> {
 
     // Now create the path, format is: '' / repository / image / ...
     // Need to skip the first three.
-    let remainder = segments.join("/");
+    let mut remainder = String::new();
+
+    segments.for_each(|segment| {
+        remainder.push('/');
+        remainder.push_str(segment);
+    });
 
     Some((image_location, remainder))
 }
