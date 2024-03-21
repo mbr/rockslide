@@ -1,6 +1,7 @@
 mod config;
 mod container_orchestrator;
 pub(crate) mod podman;
+mod postgres;
 pub(crate) mod registry;
 mod reverse_proxy;
 

@@ -22,6 +22,8 @@ pub(crate) struct Config {
     pub containers: ContainerConfig,
     #[serde(default)]
     pub reverse_proxy: ReverseProxyConfig,
+    #[serde(default)]
+    pub postgres: PostgresConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +153,12 @@ impl Default for ReverseProxyConfig {
             http_bind: default_http_bind(),
         }
     }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PostgresConfig {
+    pub uri: Option<String>,
 }
 
 fn default_http_bind() -> SocketAddr {
