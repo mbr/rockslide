@@ -84,6 +84,15 @@ async fn main() -> anyhow::Result<()> {
 
     let registry = ContainerRegistry::new(&cfg.registry.storage_path, orchestrator, auth_provider)?;
 
+    // Initialize postgres, perform self check.
+    if let Some(uri) = cfg.postgres.uri {
+        let pg = postgres::PostgresDb::new(uri);
+        let con = pg.connect().await?;
+        if !con.run_self_check().await? {
+            info!("postgres database is not yet initializing, doing so");
+        };
+    }
+
     let app = Router::new()
         .merge(registry.make_router())
         .merge(reverse_proxy.make_router())

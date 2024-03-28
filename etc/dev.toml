@@ -2,3 +2,6 @@
 [rockslide]
 log = "rockslide=trace,tower_http=debug,axum::rejection=trace"
 master_key = "devpw"
+
+[postgres]
+uri = "postgres://dev:dev@127.0.0.1:15432/dev"
